@@ -5,11 +5,11 @@ Spectra. It will contain the authenticated controller, target agent,
 transport adapters, and provisioning workflow. The `spectra` repository
 remains responsible for local macOS diagnostics.
 
-This initial revision defines a transport-neutral target agent. Its
-`serve-stdio` command is deliberately not a network server: a future
-authenticated transport supervisor will pass it already-authorized protocol
-requests. The agent accepts only typed diagnostic operations and invokes a
-configured local Spectra executable with fixed argument mappings.
+The target agent supports an embedded Tailscale `tsnet` listener, and the
+controller joins the tailnet as its own managed node. Tailscale ACLs are the
+baseline authorization control; agents can additionally allowlist login or
+node identities. The agent accepts only typed diagnostic operations and
+invokes a configured local Spectra executable with fixed argument mappings.
 
 No request can supply a shell command, argv, download URL, or executable.
 Remote installation and update will be a separately authenticated,
@@ -24,4 +24,25 @@ before publishing this module.
 ```bash
 go test ./...
 go build ./cmd/spectra-remote ./cmd/spectra-remote-agent
+```
+
+## Tailscale transport
+
+Start a target agent with an explicit local Spectra path and permitted app
+roots:
+
+```bash
+spectra-remote-agent serve-tsnet \
+  --spectra /opt/spectra/bin/spectra \
+  --tsnet-hostname work-mac \
+  --allow-app-root /Applications \
+  --tsnet-allow-login engineer@example.com
+```
+
+The controller uses a separate tsnet identity and sends only a typed request:
+
+```bash
+spectra-remote call --target work-mac:7878 --operation health
+spectra-remote call --target work-mac:7878 --operation inspect \
+  --params '{"app_paths":["/Applications/Slack.app"]}'
 ```
