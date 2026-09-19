@@ -27,6 +27,18 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunInstallRejectsNonPositiveMaxConnections(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"install", "--no-load",
+		"--spectra", "/opt/spectra/bin/spectra",
+		"--max-connections", "0",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "max-connections must be positive") {
+		t.Fatalf("run() = %d, stderr = %q", code, stderr.String())
+	}
+}
+
 func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 	oldDeps, oldExecutable := installDeps, executablePath
 	t.Cleanup(func() {
@@ -59,6 +71,7 @@ func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 		"--tsnet-hostname", "work-mac",
 		"--tsnet-state-dir", "/Users/alice/.spectra-remote/tsnet/agent",
 		"--audit-log", "/Users/alice/Library/Logs/Spectra Remote/agent.audit.jsonl",
+		"--max-connections", "4",
 		"--allow-app-root", "/Applications",
 		"--tsnet-tag", "tag:engineer",
 		"--tsnet-allow-login", "engineer@example.com",
@@ -69,7 +82,7 @@ func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 	if launchctlCalls != 0 {
 		t.Fatalf("launchctl calls = %d, want 0", launchctlCalls)
 	}
-	for _, want := range []string{"tag:engineer", "engineer@example.com", "/Applications", "agent.audit.jsonl"} {
+	for _, want := range []string{"tag:engineer", "engineer@example.com", "/Applications", "agent.audit.jsonl", ">4<"} {
 		if !strings.Contains(string(wrote), want) {
 			t.Fatalf("plist does not include %q:\n%s", want, wrote)
 		}

@@ -16,17 +16,21 @@ import (
 	"tailscale.com/tsnet"
 )
 
-const DefaultAddr = ":7878"
+const (
+	DefaultAddr           = ":7878"
+	DefaultMaxConnections = 8
+)
 
 // Config controls one managed tailnet node.
 type Config struct {
-	StateDir      string
-	Hostname      string
-	Ephemeral     bool
-	AdvertiseTags []string
-	AllowLogins   []string
-	AllowNodes    []string
-	Logf          func(format string, args ...any)
+	StateDir       string
+	Hostname       string
+	Ephemeral      bool
+	AdvertiseTags  []string
+	AllowLogins    []string
+	AllowNodes     []string
+	MaxConnections int
+	Logf           func(format string, args ...any)
 }
 
 // DefaultStateDir returns a role-specific private state directory so an
@@ -46,6 +50,10 @@ func DefaultStateDir(role string) (string, error) {
 // local agent. Tailnet ACLs always apply; optional allowlists add a second
 // target-side identity check.
 func Serve(ctx context.Context, a agent.Agent, cfg Config, addr string) error {
+	limiter, err := newConnectionLimiter(cfg.MaxConnections)
+	if err != nil {
+		return err
+	}
 	server, err := newServer(cfg)
 	if err != nil {
 		return err
@@ -73,7 +81,15 @@ func Serve(ctx context.Context, a agent.Agent, cfg Config, addr string) error {
 			}
 			return fmt.Errorf("accept tailnet connection: %w", err)
 		}
-		go handleConnection(ctx, server, cfg, a, conn)
+		if !limiter.tryAcquire() {
+			logf(cfg, "spectra-remote-agent rejected tailnet peer %s: connection limit reached", conn.RemoteAddr())
+			_ = conn.Close()
+			continue
+		}
+		go func() {
+			defer limiter.release()
+			handleConnection(ctx, server, cfg, a, conn)
+		}()
 	}
 }
 
@@ -98,6 +114,31 @@ func Dial(ctx context.Context, cfg Config, target string) (net.Conn, ioCloser, e
 type ioCloser interface {
 	Close() error
 }
+
+type connectionLimiter struct {
+	slots chan struct{}
+}
+
+func newConnectionLimiter(limit int) (connectionLimiter, error) {
+	if limit == 0 {
+		limit = DefaultMaxConnections
+	}
+	if limit < 1 {
+		return connectionLimiter{}, fmt.Errorf("max connections must be positive")
+	}
+	return connectionLimiter{slots: make(chan struct{}, limit)}, nil
+}
+
+func (l connectionLimiter) tryAcquire() bool {
+	select {
+	case l.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l connectionLimiter) release() { <-l.slots }
 
 func newServer(cfg Config) (*tsnet.Server, error) {
 	stateDir := cfg.StateDir

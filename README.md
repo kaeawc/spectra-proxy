@@ -78,3 +78,7 @@ Each agent request also produces an owner-private JSONL audit event at
 `~/Library/Logs/Spectra Remote/agent.audit.jsonl` (or the absolute path passed
 with `--audit-log`). Events contain only the time, request ID, typed operation,
 and outcome/error code—never request parameters or diagnostic results.
+
+The target limits concurrent sessions to eight by default. Change the local
+LaunchAgent configuration deliberately with `--max-connections`; the value must
+be positive.

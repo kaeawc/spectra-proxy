@@ -17,18 +17,19 @@ const Label = "dev.spectra-remote.agent"
 
 // Options are the explicitly configured arguments passed to the target agent.
 type Options struct {
-	Program     string
-	SpectraPath string
-	ListenAddr  string
-	Hostname    string
-	StateDir    string
-	AuditLog    string
-	Ephemeral   bool
-	AppRoots    []string
-	Tags        []string
-	AllowLogins []string
-	AllowNodes  []string
-	NoLoad      bool
+	Program        string
+	SpectraPath    string
+	ListenAddr     string
+	Hostname       string
+	StateDir       string
+	AuditLog       string
+	MaxConnections int
+	Ephemeral      bool
+	AppRoots       []string
+	Tags           []string
+	AllowLogins    []string
+	AllowNodes     []string
+	NoLoad         bool
 }
 
 // Deps makes filesystem and launchctl behavior testable.
@@ -149,6 +150,9 @@ func (o Options) Validate() error {
 	if !filepath.IsAbs(o.AuditLog) {
 		return fmt.Errorf("audit log path must be absolute")
 	}
+	if o.MaxConnections < 1 {
+		return fmt.Errorf("max connections must be positive")
+	}
 	for _, root := range o.AppRoots {
 		if !filepath.IsAbs(root) {
 			return fmt.Errorf("app root must be absolute: %q", root)
@@ -159,7 +163,7 @@ func (o Options) Validate() error {
 
 // Plist returns the exact plist document to be written for opts.
 func Plist(opts Options, plistPath string) string {
-	args := []string{opts.Program, "serve-tsnet", "--spectra", opts.SpectraPath, "--tsnet-addr", opts.ListenAddr, "--tsnet-hostname", opts.Hostname, "--tsnet-state-dir", opts.StateDir, "--audit-log", opts.AuditLog}
+	args := []string{opts.Program, "serve-tsnet", "--spectra", opts.SpectraPath, "--tsnet-addr", opts.ListenAddr, "--tsnet-hostname", opts.Hostname, "--tsnet-state-dir", opts.StateDir, "--audit-log", opts.AuditLog, "--max-connections", fmt.Sprint(opts.MaxConnections)}
 	if opts.Ephemeral {
 		args = append(args, "--tsnet-ephemeral")
 	}

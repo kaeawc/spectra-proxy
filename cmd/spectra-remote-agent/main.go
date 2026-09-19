@@ -93,12 +93,13 @@ func runTSNet(args []string, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	err := remoteTSNet.Serve(ctx, a, remoteTSNet.Config{
-		StateDir:      opts.stateDir,
-		Hostname:      opts.hostname,
-		Ephemeral:     opts.ephemeral,
-		AdvertiseTags: opts.tags,
-		AllowLogins:   opts.allowLogins,
-		AllowNodes:    opts.allowNodes,
+		StateDir:       opts.stateDir,
+		Hostname:       opts.hostname,
+		Ephemeral:      opts.ephemeral,
+		AdvertiseTags:  opts.tags,
+		AllowLogins:    opts.allowLogins,
+		AllowNodes:     opts.allowNodes,
+		MaxConnections: opts.maxConnections,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(stderr, format+"\n", args...)
 		},
@@ -148,18 +149,19 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	plistPath, err := agentinstall.Install(agentinstall.Options{
-		Program:     program,
-		SpectraPath: opts.spectraPath,
-		ListenAddr:  opts.listenAddr,
-		Hostname:    opts.hostname,
-		StateDir:    opts.stateDir,
-		AuditLog:    opts.auditLog,
-		Ephemeral:   opts.ephemeral,
-		AppRoots:    opts.appRoots,
-		Tags:        opts.tags,
-		AllowLogins: opts.allowLogins,
-		AllowNodes:  opts.allowNodes,
-		NoLoad:      opts.noLoad,
+		Program:        program,
+		SpectraPath:    opts.spectraPath,
+		ListenAddr:     opts.listenAddr,
+		Hostname:       opts.hostname,
+		StateDir:       opts.stateDir,
+		AuditLog:       opts.auditLog,
+		MaxConnections: opts.maxConnections,
+		Ephemeral:      opts.ephemeral,
+		AppRoots:       opts.appRoots,
+		Tags:           opts.tags,
+		AllowLogins:    opts.allowLogins,
+		AllowNodes:     opts.allowNodes,
+		NoLoad:         opts.noLoad,
 	}, installDeps())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -174,17 +176,18 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 }
 
 type tsnetOptions struct {
-	spectraPath string
-	listenAddr  string
-	hostname    string
-	stateDir    string
-	auditLog    string
-	ephemeral   bool
-	appRoots    pathList
-	tags        stringList
-	allowLogins stringList
-	allowNodes  stringList
-	noLoad      bool
+	spectraPath    string
+	listenAddr     string
+	hostname       string
+	stateDir       string
+	auditLog       string
+	maxConnections int
+	ephemeral      bool
+	appRoots       pathList
+	tags           stringList
+	allowLogins    stringList
+	allowNodes     stringList
+	noLoad         bool
 }
 
 func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad bool) (tsnetOptions, int) {
@@ -198,7 +201,7 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, err)
 		return tsnetOptions{}, 1
 	}
-	opts := tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog}
+	opts := tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog, maxConnections: remoteTSNet.DefaultMaxConnections}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&opts.spectraPath, "spectra", "", "Absolute path to the local spectra executable")
@@ -206,6 +209,7 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	fs.StringVar(&opts.hostname, "tsnet-hostname", opts.hostname, "Tailnet node hostname")
 	fs.StringVar(&opts.stateDir, "tsnet-state-dir", opts.stateDir, "Private tsnet state directory")
 	fs.StringVar(&opts.auditLog, "audit-log", opts.auditLog, "Owner-private JSONL audit log path")
+	fs.IntVar(&opts.maxConnections, "max-connections", opts.maxConnections, "Maximum simultaneous target-agent sessions")
 	fs.BoolVar(&opts.ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")
 	fs.Var(&opts.appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	fs.Var(&opts.tags, "tsnet-tag", "Tailnet tag to advertise; may be repeated")
@@ -219,6 +223,10 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "unexpected positional arguments")
+		return tsnetOptions{}, 2
+	}
+	if opts.maxConnections < 1 {
+		fmt.Fprintln(stderr, "max-connections must be positive")
 		return tsnetOptions{}, 2
 	}
 	return opts, 0

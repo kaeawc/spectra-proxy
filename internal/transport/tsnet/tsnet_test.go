@@ -36,3 +36,33 @@ func TestNormalize(t *testing.T) {
 		t.Fatalf("normalize() = %q", got)
 	}
 }
+
+func TestConnectionLimiterBoundsConcurrentSessions(t *testing.T) {
+	limiter, err := newConnectionLimiter(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !limiter.tryAcquire() || !limiter.tryAcquire() {
+		t.Fatal("limiter rejected an available slot")
+	}
+	if limiter.tryAcquire() {
+		t.Fatal("limiter accepted more than its configured limit")
+	}
+	limiter.release()
+	if !limiter.tryAcquire() {
+		t.Fatal("limiter did not release a slot")
+	}
+}
+
+func TestConnectionLimiterDefaultsAndRejectsNegativeLimit(t *testing.T) {
+	limiter, err := newConnectionLimiter(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(limiter.slots) != DefaultMaxConnections {
+		t.Fatalf("default cap = %d, want %d", cap(limiter.slots), DefaultMaxConnections)
+	}
+	if _, err := newConnectionLimiter(-1); err == nil {
+		t.Fatal("newConnectionLimiter accepted a negative limit")
+	}
+}
