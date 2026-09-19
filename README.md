@@ -46,3 +46,30 @@ spectra-remote call --target work-mac:7878 --operation health
 spectra-remote call --target work-mac:7878 --operation inspect \
   --params '{"app_paths":["/Applications/Slack.app"]}'
 ```
+
+## Local agent installation
+
+After placing `spectra-remote-agent` and `spectra` at administrator-approved
+local paths, install a per-user LaunchAgent. This action writes only a local
+plist and loads it for the current user; it does not download, update, or
+replace either binary.
+
+```bash
+spectra-remote-agent install \
+  --spectra /opt/spectra/bin/spectra \
+  --tsnet-hostname work-mac \
+  --allow-app-root /Applications \
+  --tsnet-allow-login engineer@example.com
+```
+
+Review the exact plist without loading it:
+
+```bash
+spectra-remote-agent install --no-load \
+  --spectra /opt/spectra/bin/spectra \
+  --tsnet-hostname work-mac
+```
+
+The service is `dev.spectra-remote.agent` in the current user's launchd
+domain. Use `spectra-remote-agent install status` to inspect it, and
+`spectra-remote-agent install uninstall` to unload and remove its plist.
