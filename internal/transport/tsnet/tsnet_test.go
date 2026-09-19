@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNewServerRequiresIdentity(t *testing.T) {
@@ -64,5 +65,17 @@ func TestConnectionLimiterDefaultsAndRejectsNegativeLimit(t *testing.T) {
 	}
 	if _, err := newConnectionLimiter(-1); err == nil {
 		t.Fatal("newConnectionLimiter accepted a negative limit")
+	}
+}
+
+func TestSessionTimeoutDefaultsAndAcceptsConfiguredValue(t *testing.T) {
+	if got := sessionTimeout(0); got != DefaultSessionTimeout {
+		t.Fatalf("default session timeout = %s, want %s", got, DefaultSessionTimeout)
+	}
+	if got := sessionTimeout(-time.Second); got != DefaultSessionTimeout {
+		t.Fatalf("negative session timeout = %s, want %s", got, DefaultSessionTimeout)
+	}
+	if got := sessionTimeout(15 * time.Second); got != 15*time.Second {
+		t.Fatalf("configured session timeout = %s", got)
 	}
 }

@@ -19,6 +19,7 @@ import (
 const (
 	DefaultAddr           = ":7878"
 	DefaultMaxConnections = 8
+	DefaultSessionTimeout = time.Minute
 )
 
 // Config controls one managed tailnet node.
@@ -30,6 +31,7 @@ type Config struct {
 	AllowLogins    []string
 	AllowNodes     []string
 	MaxConnections int
+	SessionTimeout time.Duration
 	Logf           func(format string, args ...any)
 }
 
@@ -166,6 +168,10 @@ func newServer(cfg Config) (*tsnet.Server, error) {
 
 func handleConnection(ctx context.Context, server *tsnet.Server, cfg Config, a agent.Agent, conn net.Conn) {
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(sessionTimeout(cfg.SessionTimeout))); err != nil {
+		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: set session deadline: %v", conn.RemoteAddr(), err)
+		return
+	}
 	if err := authorize(ctx, server, cfg, conn.RemoteAddr().String()); err != nil {
 		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: %v", conn.RemoteAddr(), err)
 		return
@@ -173,6 +179,13 @@ func handleConnection(ctx context.Context, server *tsnet.Server, cfg Config, a a
 	if err := agent.Serve(ctx, a, conn, conn); err != nil {
 		logf(cfg, "spectra-remote-agent session %s stopped: %v", conn.RemoteAddr(), err)
 	}
+}
+
+func sessionTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return DefaultSessionTimeout
+	}
+	return timeout
 }
 
 func authorize(ctx context.Context, server *tsnet.Server, cfg Config, remoteAddr string) error {

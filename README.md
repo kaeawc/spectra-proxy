@@ -82,3 +82,7 @@ and outcome/error code—never request parameters or diagnostic results.
 The target limits concurrent sessions to eight by default. Change the local
 LaunchAgent configuration deliberately with `--max-connections`; the value must
 be positive.
+
+Every target session also has a one-minute total deadline. That releases a
+session slot when an authenticated peer connects but never completes a typed
+request; the controller opens one short-lived session per call.
