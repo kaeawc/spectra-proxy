@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -54,12 +55,18 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("spectra-remote-agent serve-stdio", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	spectraPath := fs.String("spectra", "", "Absolute path to the local spectra executable")
+	auditLog, err := defaultAuditLogPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fs.StringVar(&auditLog, "audit-log", auditLog, "Owner-private JSONL audit log path")
 	var appRoots pathList
 	fs.Var(&appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	a, ok := newAgent(*spectraPath, appRoots, stderr)
+	a, ok := newAgent(*spectraPath, appRoots, auditLog, stderr)
 	if !ok {
 		return 2
 	}
@@ -79,7 +86,7 @@ func runTSNet(args []string, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(opts.spectraPath, opts.appRoots, stderr)
+	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, stderr)
 	if !ok {
 		return 2
 	}
@@ -146,6 +153,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		ListenAddr:  opts.listenAddr,
 		Hostname:    opts.hostname,
 		StateDir:    opts.stateDir,
+		AuditLog:    opts.auditLog,
 		Ephemeral:   opts.ephemeral,
 		AppRoots:    opts.appRoots,
 		Tags:        opts.tags,
@@ -170,6 +178,7 @@ type tsnetOptions struct {
 	listenAddr  string
 	hostname    string
 	stateDir    string
+	auditLog    string
 	ephemeral   bool
 	appRoots    pathList
 	tags        stringList
@@ -184,13 +193,19 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, err)
 		return tsnetOptions{}, 1
 	}
-	opts := tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir}
+	auditLog, err := defaultAuditLogPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return tsnetOptions{}, 1
+	}
+	opts := tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&opts.spectraPath, "spectra", "", "Absolute path to the local spectra executable")
 	fs.StringVar(&opts.listenAddr, "tsnet-addr", opts.listenAddr, "Tailnet listen address")
 	fs.StringVar(&opts.hostname, "tsnet-hostname", opts.hostname, "Tailnet node hostname")
 	fs.StringVar(&opts.stateDir, "tsnet-state-dir", opts.stateDir, "Private tsnet state directory")
+	fs.StringVar(&opts.auditLog, "audit-log", opts.auditLog, "Owner-private JSONL audit log path")
 	fs.BoolVar(&opts.ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")
 	fs.Var(&opts.appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	fs.Var(&opts.tags, "tsnet-tag", "Tailnet tag to advertise; may be repeated")
@@ -209,15 +224,29 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	return opts, 0
 }
 
-func newAgent(spectraPath string, appRoots pathList, stderr io.Writer) (agent.Agent, bool) {
+func newAgent(spectraPath string, appRoots pathList, auditLog string, stderr io.Writer) (agent.Agent, bool) {
 	if spectraPath == "" || !strings.HasPrefix(spectraPath, "/") {
 		fmt.Fprintln(stderr, "an absolute --spectra path is required")
+		return agent.Agent{}, false
+	}
+	auditor, err := agent.NewJSONLAuditor(auditLog)
+	if err != nil {
+		fmt.Fprintln(stderr, "configure audit log:", err)
 		return agent.Agent{}, false
 	}
 	return agent.Agent{
 		Runner:       agent.LocalSpectra{Path: spectraPath, AllowedAppRoots: appRoots},
 		AgentVersion: version,
+		Auditor:      auditor,
 	}, true
+}
+
+func defaultAuditLogPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory for audit log: %w", err)
+	}
+	return filepath.Join(home, "Library", "Logs", "Spectra Remote", "agent.audit.jsonl"), nil
 }
 
 func printUsage(w io.Writer) {

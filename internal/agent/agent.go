@@ -26,10 +26,18 @@ type Agent struct {
 	Runner         Runner
 	AgentVersion   string
 	MaxRunDuration time.Duration
+	Auditor        Auditor
+	Now            func() time.Time
 }
 
 // Handle returns a protocol response for one request.
 func (a Agent) Handle(ctx context.Context, req protocol.Request) protocol.Response {
+	response := a.handle(ctx, req)
+	a.recordAudit(req, response)
+	return response
+}
+
+func (a Agent) handle(ctx context.Context, req protocol.Request) protocol.Response {
 	if err := req.Validate(); err != nil {
 		return failure(req.RequestID, "invalid_request", err)
 	}
@@ -48,6 +56,31 @@ func (a Agent) Handle(ctx context.Context, req protocol.Request) protocol.Respon
 	default:
 		return failure(req.RequestID, "unsupported_operation", fmt.Errorf("operation %q is not supported", req.Operation))
 	}
+}
+
+func (a Agent) recordAudit(req protocol.Request, response protocol.Response) {
+	if a.Auditor == nil {
+		return
+	}
+	event := AuditEvent{
+		At:        a.now().UTC(),
+		RequestID: req.RequestID,
+		Operation: req.Operation,
+		Stage:     "completed",
+		Outcome:   "succeeded",
+	}
+	if response.Error != nil {
+		event.Outcome = "rejected"
+		event.ErrorCode = response.Error.Code
+	}
+	_ = a.Auditor.Record(event)
+}
+
+func (a Agent) now() time.Time {
+	if a.Now != nil {
+		return a.Now()
+	}
+	return time.Now()
 }
 
 func (a Agent) requestTimeout(req protocol.Request) time.Duration {

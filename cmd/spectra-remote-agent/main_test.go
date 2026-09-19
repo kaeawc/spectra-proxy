@@ -58,6 +58,7 @@ func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 		"--spectra", "/opt/spectra/bin/spectra",
 		"--tsnet-hostname", "work-mac",
 		"--tsnet-state-dir", "/Users/alice/.spectra-remote/tsnet/agent",
+		"--audit-log", "/Users/alice/Library/Logs/Spectra Remote/agent.audit.jsonl",
 		"--allow-app-root", "/Applications",
 		"--tsnet-tag", "tag:engineer",
 		"--tsnet-allow-login", "engineer@example.com",
@@ -68,7 +69,7 @@ func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 	if launchctlCalls != 0 {
 		t.Fatalf("launchctl calls = %d, want 0", launchctlCalls)
 	}
-	for _, want := range []string{"tag:engineer", "engineer@example.com", "/Applications"} {
+	for _, want := range []string{"tag:engineer", "engineer@example.com", "/Applications", "agent.audit.jsonl"} {
 		if !strings.Contains(string(wrote), want) {
 			t.Fatalf("plist does not include %q:\n%s", want, wrote)
 		}

@@ -73,3 +73,8 @@ spectra-remote-agent install --no-load \
 The service is `dev.spectra-remote.agent` in the current user's launchd
 domain. Use `spectra-remote-agent install status` to inspect it, and
 `spectra-remote-agent install uninstall` to unload and remove its plist.
+
+Each agent request also produces an owner-private JSONL audit event at
+`~/Library/Logs/Spectra Remote/agent.audit.jsonl` (or the absolute path passed
+with `--audit-log`). Events contain only the time, request ID, typed operation,
+and outcome/error code—never request parameters or diagnostic results.

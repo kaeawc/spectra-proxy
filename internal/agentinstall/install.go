@@ -22,6 +22,7 @@ type Options struct {
 	ListenAddr  string
 	Hostname    string
 	StateDir    string
+	AuditLog    string
 	Ephemeral   bool
 	AppRoots    []string
 	Tags        []string
@@ -145,6 +146,9 @@ func (o Options) Validate() error {
 	if !filepath.IsAbs(o.StateDir) {
 		return fmt.Errorf("tsnet state directory must be absolute")
 	}
+	if !filepath.IsAbs(o.AuditLog) {
+		return fmt.Errorf("audit log path must be absolute")
+	}
 	for _, root := range o.AppRoots {
 		if !filepath.IsAbs(root) {
 			return fmt.Errorf("app root must be absolute: %q", root)
@@ -155,7 +159,7 @@ func (o Options) Validate() error {
 
 // Plist returns the exact plist document to be written for opts.
 func Plist(opts Options, plistPath string) string {
-	args := []string{opts.Program, "serve-tsnet", "--spectra", opts.SpectraPath, "--tsnet-addr", opts.ListenAddr, "--tsnet-hostname", opts.Hostname, "--tsnet-state-dir", opts.StateDir}
+	args := []string{opts.Program, "serve-tsnet", "--spectra", opts.SpectraPath, "--tsnet-addr", opts.ListenAddr, "--tsnet-hostname", opts.Hostname, "--tsnet-state-dir", opts.StateDir, "--audit-log", opts.AuditLog}
 	if opts.Ephemeral {
 		args = append(args, "--tsnet-ephemeral")
 	}

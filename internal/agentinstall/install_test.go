@@ -14,6 +14,7 @@ func testOptions() Options {
 		ListenAddr:  ":7878",
 		Hostname:    "work-mac",
 		StateDir:    "/Users/alice/.spectra-remote/tsnet/agent",
+		AuditLog:    "/Users/alice/Library/Logs/Spectra Remote/agent.audit.jsonl",
 		AppRoots:    []string{"/Applications"},
 		AllowLogins: []string{"engineer@example.com"},
 	}
@@ -21,7 +22,7 @@ func testOptions() Options {
 
 func TestPlistIncludesOnlyConfiguredArguments(t *testing.T) {
 	plist := Plist(testOptions(), "/Users/alice/Library/LaunchAgents/"+Label+".plist")
-	for _, want := range []string{"serve-tsnet", "--spectra", "/opt/spectra/bin/spectra", "--tsnet-allow-login", "engineer@example.com"} {
+	for _, want := range []string{"serve-tsnet", "--spectra", "/opt/spectra/bin/spectra", "--audit-log", "agent.audit.jsonl", "--tsnet-allow-login", "engineer@example.com"} {
 		if !strings.Contains(plist, want) {
 			t.Fatalf("plist does not include %q:\n%s", want, plist)
 		}
