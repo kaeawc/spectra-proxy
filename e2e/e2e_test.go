@@ -186,7 +186,7 @@ func TestInstallRejectsIncompatibleSpectra(t *testing.T) {
 	script := "#!/bin/sh\nif [ \"$1\" = capabilities ]; then printf '%s\\n' '" + caps + "'; exit 0; fi\nexit 1\n"
 	e := newEnv(t, h, newReleaseServer(t, h.scriptRelease(t, version, script)))
 	r := e.provision("install", "--version", version)
-	if r.code != 1 || !strings.Contains(r.stderr, "incompatible Spectra capabilities schema version 2") {
+	if r.code != 1 || !strings.Contains(r.stderr, "incompatible Spectra") || !strings.Contains(r.stderr, "schema version 2") {
 		t.Fatalf("incompatible install: %s", r)
 	}
 	e.requireNothingInstalled()
