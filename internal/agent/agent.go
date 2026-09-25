@@ -1,93 +1,245 @@
-// Package agent exposes a transport-neutral, typed bridge to a locally
-// installed Spectra binary. Transport authentication and installation are
-// intentionally outside this package.
+// Package agent exposes a transport-neutral, typed bridge to a locally installed Spectra binary.
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 )
 
-// Runner performs the explicitly supported local diagnostic operations.
-// It is intentionally not a generic command runner.
+// Runner performs only supported local diagnostic operations.
 type Runner interface {
-	Version(context.Context) (string, error)
+	Capabilities(context.Context) (SpectraCapabilities, error)
 	Inspect(context.Context, protocol.InspectParams) (json.RawMessage, error)
 	SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error)
 }
 
-// Agent dispatches protocol requests to one local Spectra installation.
+type Policy struct {
+	AllowSnapshot     bool
+	AllowSnapshotApps bool
+}
+
+// Agent dispatches requests to one local Spectra installation.
 type Agent struct {
 	Runner         Runner
 	AgentVersion   string
 	MaxRunDuration time.Duration
 	Auditor        Auditor
 	Now            func() time.Time
+	Policy         Policy
+	Logf           func(string, ...any)
+	mu             sync.Mutex
+	capabilities   SpectraCapabilities
+	capsErr        error
+	capsLoaded     bool
 }
 
-// Handle returns a protocol response for one request.
-func (a Agent) Handle(ctx context.Context, req protocol.Request) protocol.Response {
-	response := a.handle(ctx, req)
-	a.recordAudit(req, response)
-	return response
+type preparedRequest struct {
+	inspect  protocol.InspectParams
+	snapshot protocol.SnapshotCreateParams
+	caps     SpectraCapabilities
+	schema   protocol.SchemaRef
 }
 
-func (a Agent) handle(ctx context.Context, req protocol.Request) protocol.Response {
+// Handle validates, authorizes, audits, and dispatches one request.
+func (a *Agent) Handle(ctx context.Context, req protocol.Request) protocol.Response {
 	if err := req.Validate(); err != nil {
-		return failure(req.RequestID, "invalid_request", err)
-	}
-	if a.Runner == nil {
-		return failure(req.RequestID, "unavailable", fmt.Errorf("local Spectra runner is not configured"))
+		return a.reject(ctx, req, protocol.RequestErrorCode(err), err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, a.requestTimeout(req))
 	defer cancel()
+	prepared, code, err := a.prepare(ctx, req)
+	if err != nil {
+		return a.reject(ctx, req, code, err)
+	}
+	if err := a.audit(ctx, req, "started", "", ""); err != nil {
+		return failure(req.RequestID, protocol.CodeUnavailable, fmt.Errorf("audit log unavailable: %w", err))
+	}
+	response := a.runPrepared(ctx, req, prepared)
+	a.completeAudit(ctx, req, response)
+	return response
+}
+
+func (a *Agent) prepare(ctx context.Context, req protocol.Request) (preparedRequest, protocol.ErrorCode, error) {
+	switch req.Operation {
+	case protocol.OperationHealth:
+		return preparedRequest{}, "", nil
+	case protocol.OperationInspect:
+		var p preparedRequest
+		if err := decodeParams(req.Params, &p.inspect); err != nil {
+			return p, protocol.CodeInvalidRequest, err
+		}
+		if len(p.inspect.AppPaths) == 0 {
+			return p, protocol.CodeInvalidRequest, fmt.Errorf("inspect requires at least one app path")
+		}
+		return a.prepareCompatible(ctx, req.Operation, p)
+	case protocol.OperationSnapshotCreate:
+		return a.prepareSnapshot(ctx, req)
+	default:
+		return preparedRequest{}, protocol.CodeUnsupportedOperation, fmt.Errorf("operation %q is not supported", req.Operation)
+	}
+}
+
+func (a *Agent) prepareSnapshot(ctx context.Context, req protocol.Request) (preparedRequest, protocol.ErrorCode, error) {
+	var p preparedRequest
+	// A fixed local policy denial wins over installed-Spectra incompatibility.
+	if !a.Policy.AllowSnapshot {
+		return p, protocol.CodePermissionDenied, fmt.Errorf("snapshots are disabled")
+	}
+	if err := decodeParams(req.Params, &p.snapshot); err != nil {
+		return p, protocol.CodeInvalidRequest, err
+	}
+	if p.snapshot.IncludeApps && !a.Policy.AllowSnapshotApps {
+		return p, protocol.CodePermissionDenied, fmt.Errorf("snapshot app collection is disabled")
+	}
+	return a.prepareCompatible(ctx, req.Operation, p)
+}
+
+func (a *Agent) prepareCompatible(ctx context.Context, op protocol.Operation, p preparedRequest) (preparedRequest, protocol.ErrorCode, error) {
+	if a.Runner == nil {
+		return p, protocol.CodeUnavailable, fmt.Errorf("local Spectra runner is not configured")
+	}
+	var err error
+	p.caps, p.schema, err = a.compatible(ctx, op)
+	if err != nil {
+		return p, protocol.CodeIncompatibleSpectra, err
+	}
+	return p, "", nil
+}
+
+func (a *Agent) runPrepared(ctx context.Context, req protocol.Request, p preparedRequest) protocol.Response {
 	switch req.Operation {
 	case protocol.OperationHealth:
 		return a.health(ctx, req)
 	case protocol.OperationInspect:
-		return a.inspect(ctx, req)
+		result, err := a.Runner.Inspect(ctx, p.inspect)
+		return a.diagnosticResponse(req.RequestID, p.schema, p.caps.SpectraVersion, result, err, ctx)
 	case protocol.OperationSnapshotCreate:
-		return a.snapshotCreate(ctx, req)
-	default:
-		return failure(req.RequestID, "unsupported_operation", fmt.Errorf("operation %q is not supported", req.Operation))
+		result, err := a.Runner.SnapshotCreate(ctx, p.snapshot)
+		return a.diagnosticResponse(req.RequestID, p.schema, p.caps.SpectraVersion, result, err, ctx)
 	}
+	return failure(req.RequestID, protocol.CodeInternal, fmt.Errorf("unreachable operation %q", req.Operation))
 }
 
-func (a Agent) recordAudit(req protocol.Request, response protocol.Response) {
-	if a.Auditor == nil {
-		return
-	}
-	event := AuditEvent{
-		At:        a.now().UTC(),
-		RequestID: req.RequestID,
-		Operation: req.Operation,
-		Stage:     "completed",
-		Outcome:   "succeeded",
-	}
+func (a *Agent) completeAudit(ctx context.Context, req protocol.Request, response protocol.Response) {
+	outcome, code := "succeeded", protocol.ErrorCode("")
 	if response.Error != nil {
-		event.Outcome = "rejected"
-		event.ErrorCode = response.Error.Code
+		outcome, code = "failed", response.Error.Code
 	}
-	_ = a.Auditor.Record(event)
+	if err := a.audit(ctx, req, "completed", outcome, code); err != nil && a.Logf != nil {
+		a.Logf("audit completed write failed: %v", err)
+	}
 }
 
-func (a Agent) now() time.Time {
+func (a *Agent) compatible(ctx context.Context, op protocol.Operation) (SpectraCapabilities, protocol.SchemaRef, error) {
+	caps, err := a.loadCapabilities(ctx, false)
+	if err != nil {
+		return caps, protocol.SchemaRef{}, fmt.Errorf("probe Spectra capabilities: %w", err)
+	}
+	schema, err := caps.resultSchema(op)
+	if err != nil {
+		return caps, schema, fmt.Errorf("check Spectra result schema: %w", err)
+	}
+	return caps, schema, nil
+}
+
+func (a *Agent) loadCapabilities(ctx context.Context, refresh bool) (SpectraCapabilities, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.capsLoaded || refresh {
+		a.capabilities, a.capsErr = a.Runner.Capabilities(ctx)
+		a.capsLoaded = true
+		if a.capsErr == nil && (a.capabilities.Schema.Name != "spectra.capabilities" || a.capabilities.Schema.Version != 1) {
+			a.capsErr = fmt.Errorf("unsupported Spectra capabilities schema")
+		}
+	}
+	return a.capabilities, a.capsErr
+}
+
+func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Response {
+	var caps SpectraCapabilities
+	var err error
+	if a.Runner != nil {
+		caps, err = a.loadCapabilities(ctx, true)
+	} else {
+		err = fmt.Errorf("local Spectra runner is not configured")
+	}
+	manifest := protocol.CapabilityManifest{
+		ProtocolVersions: []string{protocol.Version}, AgentVersion: a.AgentVersion,
+		Operations: []protocol.OperationCapability{{Name: protocol.OperationHealth}},
+		Limits:     protocol.Limits{MaxRequestBytes: protocol.MaxRequestBytes, MaxResponseBytes: protocol.MaxResponseBytes, MaxTimeoutMS: a.maxTimeoutMS()},
+	}
+	if err == nil {
+		manifest.SpectraVersion = caps.SpectraVersion
+		for _, op := range []protocol.Operation{protocol.OperationInspect, protocol.OperationSnapshotCreate} {
+			if op == protocol.OperationSnapshotCreate && !a.Policy.AllowSnapshot {
+				continue
+			}
+			if schema, schemaErr := caps.resultSchema(op); schemaErr == nil {
+				manifest.Operations = append(manifest.Operations, protocol.OperationCapability{Name: op, ResultSchema: &schema})
+			}
+		}
+	}
+	return success(req.RequestID, protocol.HealthResult{Capabilities: manifest})
+}
+
+func (a *Agent) maxTimeoutMS() int {
+	max := a.MaxRunDuration
+	if max <= 0 {
+		max = 30 * time.Second
+	}
+	if max > time.Duration(protocol.MaxTimeoutMS)*time.Millisecond {
+		return protocol.MaxTimeoutMS
+	}
+	ms := int(max / time.Millisecond)
+	if ms < 1 {
+		return 1
+	}
+	return ms
+}
+
+func (a *Agent) diagnosticResponse(id string, schema protocol.SchemaRef, version string, data json.RawMessage, runErr error, ctx context.Context) protocol.Response {
+	if runErr != nil {
+		code := protocol.CodeExecutionFailed
+		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = protocol.CodeTimeout
+		}
+		return failure(id, code, runErr)
+	}
+	if !json.Valid(data) || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return failure(id, protocol.CodeExecutionFailed, fmt.Errorf("Spectra returned invalid diagnostic JSON"))
+	}
+	return success(id, protocol.DiagnosticResult{Schema: schema, SpectraVersion: version, Data: data})
+}
+
+func (a *Agent) reject(ctx context.Context, req protocol.Request, code protocol.ErrorCode, err error) protocol.Response {
+	_ = a.audit(ctx, req, "completed", "rejected", code)
+	return failure(req.RequestID, code, err)
+}
+
+func (a *Agent) audit(ctx context.Context, req protocol.Request, stage, outcome string, code protocol.ErrorCode) error {
+	if a.Auditor == nil {
+		return nil
+	}
+	peer, _ := PeerFrom(ctx)
+	return a.Auditor.Record(AuditEvent{At: a.now().UTC(), RequestID: req.RequestID, Operation: req.Operation, Peer: peer, Stage: stage, Outcome: outcome, ErrorCode: code})
+}
+
+func (a *Agent) now() time.Time {
 	if a.Now != nil {
 		return a.Now()
 	}
 	return time.Now()
 }
-
-func (a Agent) requestTimeout(req protocol.Request) time.Duration {
-	max := a.MaxRunDuration
-	if max <= 0 {
-		max = 30 * time.Second
-	}
+func (a *Agent) requestTimeout(req protocol.Request) time.Duration {
+	max := time.Duration(a.maxTimeoutMS()) * time.Millisecond
 	if req.TimeoutMS <= 0 {
 		return max
 	}
@@ -96,50 +248,6 @@ func (a Agent) requestTimeout(req protocol.Request) time.Duration {
 		return want
 	}
 	return max
-}
-
-func (a Agent) health(ctx context.Context, req protocol.Request) protocol.Response {
-	version, err := a.Runner.Version(ctx)
-	if err != nil {
-		return failure(req.RequestID, "execution_failed", err)
-	}
-	return success(req.RequestID, protocol.HealthResult{Capabilities: protocol.CapabilityManifest{
-		ProtocolVersion: protocol.Version,
-		SpectraVersion:  version,
-		AgentVersion:    a.AgentVersion,
-		Operations: []protocol.Operation{
-			protocol.OperationHealth,
-			protocol.OperationInspect,
-			protocol.OperationSnapshotCreate,
-		},
-	}})
-}
-
-func (a Agent) inspect(ctx context.Context, req protocol.Request) protocol.Response {
-	var params protocol.InspectParams
-	if err := decodeParams(req.Params, &params); err != nil {
-		return failure(req.RequestID, "invalid_request", err)
-	}
-	if len(params.AppPaths) == 0 {
-		return failure(req.RequestID, "invalid_request", fmt.Errorf("inspect requires at least one app path"))
-	}
-	result, err := a.Runner.Inspect(ctx, params)
-	if err != nil {
-		return failure(req.RequestID, "execution_failed", err)
-	}
-	return rawSuccess(req.RequestID, result)
-}
-
-func (a Agent) snapshotCreate(ctx context.Context, req protocol.Request) protocol.Response {
-	var params protocol.SnapshotCreateParams
-	if err := decodeParams(req.Params, &params); err != nil {
-		return failure(req.RequestID, "invalid_request", err)
-	}
-	result, err := a.Runner.SnapshotCreate(ctx, params)
-	if err != nil {
-		return failure(req.RequestID, "execution_failed", err)
-	}
-	return rawSuccess(req.RequestID, result)
 }
 
 func decodeParams(raw json.RawMessage, dst any) error {
@@ -153,23 +261,13 @@ func decodeParams(raw json.RawMessage, dst any) error {
 	}
 	return nil
 }
-
-func success(requestID string, value any) protocol.Response {
+func success(id string, value any) protocol.Response {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return failure(requestID, "internal", err)
+		return failure(id, protocol.CodeInternal, err)
 	}
-	return rawSuccess(requestID, raw)
+	return protocol.Response{ProtocolVersion: protocol.Version, RequestID: id, Result: raw}
 }
-
-func rawSuccess(requestID string, raw json.RawMessage) protocol.Response {
-	return protocol.Response{ProtocolVersion: protocol.Version, RequestID: requestID, Result: raw}
-}
-
-func failure(requestID, code string, err error) protocol.Response {
-	return protocol.Response{
-		ProtocolVersion: protocol.Version,
-		RequestID:       requestID,
-		Error:           &protocol.Error{Code: code, Message: err.Error()},
-	}
+func failure(id string, code protocol.ErrorCode, err error) protocol.Response {
+	return protocol.Response{ProtocolVersion: protocol.Version, RequestID: id, Error: protocol.NewError(code, err.Error())}
 }

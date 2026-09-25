@@ -19,7 +19,8 @@ signature-verified provisioning workflow; they will not be protocol methods.
 ## Local development
 
 The module path is `github.com/kaeawc/spectra-proxy` and it depends on a
-tagged `github.com/kaeawc/spectra-protocol` release. Run `make ci` to build,
+`github.com/kaeawc/spectra-protocol` protocol/v1 contract. The current
+worktree uses a temporary local module replace. Run `make ci` to build,
 test, vet, and check formatting locally. See [RELEASING.md](RELEASING.md) for
 release steps.
 
@@ -39,6 +40,10 @@ spectra-remote-agent serve-tsnet \
   --allow-app-root /Applications \
   --tsnet-allow-login engineer@example.com
 ```
+
+The agent resolves an authenticated Tailscale identity for every connection, including
+when no login or node allowlist is configured. A failed identity lookup denies
+the connection.
 
 The controller uses a separate tsnet identity and sends only a typed request:
 
@@ -71,14 +76,26 @@ spectra-remote-agent install --no-load \
   --tsnet-hostname work-mac
 ```
 
+Snapshots are disabled by default. Add `--allow-snapshot` to `serve-stdio`,
+`serve-tsnet`, or `install` to permit `snapshot.create`; add
+`--allow-snapshot-apps` as well to permit requests with `include_apps: true`.
+The second flag requires the first. The installed Spectra must provide
+`spectra capabilities --json` with supported `spectra.inspect` and
+`spectra.snapshot` result schemas before the agent advertises or allows
+`inspect` and `snapshot.create`. A failed capabilities probe leaves `health`
+available and advertises only `health`.
+
 The service is `dev.spectra-remote.agent` in the current user's launchd
 domain. Use `spectra-remote-agent install status` to inspect it, and
 `spectra-remote-agent install uninstall` to unload and remove its plist.
 
-Each agent request also produces an owner-private JSONL audit event at
+Each agent request produces owner-private JSONL audit events at
 `~/Library/Logs/Spectra Remote/agent.audit.jsonl` (or the absolute path passed
-with `--audit-log`). Events contain only the time, request ID, typed operation,
-and outcome/error code—never request parameters or diagnostic results.
+with `--audit-log`). Events contain the time, request ID, typed operation, authenticated peer
+(`transport`, login, node, address or local user), stage (`started`,
+`completed`, or connection `denied`), and outcome/error code. Parameters
+and diagnostic results are never logged. A failed `started` write blocks
+execution; a failed `completed` write is reported to the agent log.
 
 The target limits concurrent sessions to eight by default. Change the local
 LaunchAgent configuration deliberately with `--max-connections`; the value must

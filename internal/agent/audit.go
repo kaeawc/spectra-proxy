@@ -18,9 +18,10 @@ type AuditEvent struct {
 	At        time.Time          `json:"at"`
 	RequestID string             `json:"request_id"`
 	Operation protocol.Operation `json:"operation"`
+	Peer      Peer               `json:"peer"`
 	Stage     string             `json:"stage"`
 	Outcome   string             `json:"outcome"`
-	ErrorCode string             `json:"error_code,omitempty"`
+	ErrorCode protocol.ErrorCode `json:"error_code,omitempty"`
 }
 
 // Auditor persists target-agent audit metadata.

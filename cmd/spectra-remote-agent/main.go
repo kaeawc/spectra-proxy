@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -62,18 +64,29 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	fs.StringVar(&auditLog, "audit-log", auditLog, "Owner-private JSONL audit log path")
 	var appRoots pathList
+	allowSnapshot := fs.Bool("allow-snapshot", false, "Allow snapshot creation")
+	allowSnapshotApps := fs.Bool("allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
 	fs.Var(&appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	a, ok := newAgent(*spectraPath, appRoots, auditLog, stderr)
+	if *allowSnapshotApps && !*allowSnapshot {
+		fmt.Fprintln(stderr, "--allow-snapshot-apps requires --allow-snapshot")
+		return 2
+	}
+	a, ok := newAgent(*spectraPath, appRoots, auditLog, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
 	if !ok {
 		return 2
 	}
 	return serveStdio(context.Background(), a, stdin, stdout, stderr)
 }
 
-func serveStdio(ctx context.Context, a agent.Agent, stdin io.Reader, stdout, stderr io.Writer) int {
+func serveStdio(ctx context.Context, a *agent.Agent, stdin io.Reader, stdout, stderr io.Writer) int {
+	localUser := strconv.Itoa(os.Getuid())
+	if current, err := user.Current(); err == nil {
+		localUser = current.Username
+	}
+	ctx = agent.WithPeer(ctx, agent.Peer{Transport: "stdio", LocalUser: localUser})
 	if err := agent.Serve(ctx, a, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -86,7 +99,7 @@ func runTSNet(args []string, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, stderr)
+	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, agent.Policy{AllowSnapshot: opts.allowSnapshot, AllowSnapshotApps: opts.allowSnapshotApps}, stderr)
 	if !ok {
 		return 2
 	}
@@ -149,19 +162,21 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	plistPath, err := agentinstall.Install(agentinstall.Options{
-		Program:        program,
-		SpectraPath:    opts.spectraPath,
-		ListenAddr:     opts.listenAddr,
-		Hostname:       opts.hostname,
-		StateDir:       opts.stateDir,
-		AuditLog:       opts.auditLog,
-		MaxConnections: opts.maxConnections,
-		Ephemeral:      opts.ephemeral,
-		AppRoots:       opts.appRoots,
-		Tags:           opts.tags,
-		AllowLogins:    opts.allowLogins,
-		AllowNodes:     opts.allowNodes,
-		NoLoad:         opts.noLoad,
+		Program:           program,
+		SpectraPath:       opts.spectraPath,
+		ListenAddr:        opts.listenAddr,
+		Hostname:          opts.hostname,
+		StateDir:          opts.stateDir,
+		AuditLog:          opts.auditLog,
+		MaxConnections:    opts.maxConnections,
+		Ephemeral:         opts.ephemeral,
+		AppRoots:          opts.appRoots,
+		Tags:              opts.tags,
+		AllowLogins:       opts.allowLogins,
+		AllowNodes:        opts.allowNodes,
+		NoLoad:            opts.noLoad,
+		AllowSnapshot:     opts.allowSnapshot,
+		AllowSnapshotApps: opts.allowSnapshotApps,
 	}, installDeps())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -176,18 +191,20 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 }
 
 type tsnetOptions struct {
-	spectraPath    string
-	listenAddr     string
-	hostname       string
-	stateDir       string
-	auditLog       string
-	maxConnections int
-	ephemeral      bool
-	appRoots       pathList
-	tags           stringList
-	allowLogins    stringList
-	allowNodes     stringList
-	noLoad         bool
+	spectraPath       string
+	listenAddr        string
+	hostname          string
+	stateDir          string
+	auditLog          string
+	maxConnections    int
+	ephemeral         bool
+	appRoots          pathList
+	tags              stringList
+	allowLogins       stringList
+	allowNodes        stringList
+	noLoad            bool
+	allowSnapshot     bool
+	allowSnapshotApps bool
 }
 
 func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad bool) (tsnetOptions, int) {
@@ -211,6 +228,8 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	fs.StringVar(&opts.auditLog, "audit-log", opts.auditLog, "Owner-private JSONL audit log path")
 	fs.IntVar(&opts.maxConnections, "max-connections", opts.maxConnections, "Maximum simultaneous target-agent sessions")
 	fs.BoolVar(&opts.ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")
+	fs.BoolVar(&opts.allowSnapshot, "allow-snapshot", false, "Allow snapshot creation")
+	fs.BoolVar(&opts.allowSnapshotApps, "allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
 	fs.Var(&opts.appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	fs.Var(&opts.tags, "tsnet-tag", "Tailnet tag to advertise; may be repeated")
 	fs.Var(&opts.allowLogins, "tsnet-allow-login", "Tailnet login name allowed to connect; may be repeated")
@@ -225,6 +244,10 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, "unexpected positional arguments")
 		return tsnetOptions{}, 2
 	}
+	if opts.allowSnapshotApps && !opts.allowSnapshot {
+		fmt.Fprintln(stderr, "--allow-snapshot-apps requires --allow-snapshot")
+		return tsnetOptions{}, 2
+	}
 	if opts.maxConnections < 1 {
 		fmt.Fprintln(stderr, "max-connections must be positive")
 		return tsnetOptions{}, 2
@@ -232,20 +255,22 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	return opts, 0
 }
 
-func newAgent(spectraPath string, appRoots pathList, auditLog string, stderr io.Writer) (agent.Agent, bool) {
+func newAgent(spectraPath string, appRoots pathList, auditLog string, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
 	if spectraPath == "" || !strings.HasPrefix(spectraPath, "/") {
 		fmt.Fprintln(stderr, "an absolute --spectra path is required")
-		return agent.Agent{}, false
+		return nil, false
 	}
 	auditor, err := agent.NewJSONLAuditor(auditLog)
 	if err != nil {
 		fmt.Fprintln(stderr, "configure audit log:", err)
-		return agent.Agent{}, false
+		return nil, false
 	}
-	return agent.Agent{
+	return &agent.Agent{
 		Runner:       agent.LocalSpectra{Path: spectraPath, AllowedAppRoots: appRoots},
 		AgentVersion: version,
 		Auditor:      auditor,
+		Policy:       policy,
+		Logf:         func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) },
 	}, true
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 	"github.com/kaeawc/spectra-proxy/internal/agent"
 	"tailscale.com/tsnet"
 )
@@ -51,7 +52,7 @@ func DefaultStateDir(role string) (string, error) {
 // Serve accepts authenticated tailnet connections and routes them to a typed
 // local agent. Tailnet ACLs always apply; optional allowlists add a second
 // target-side identity check.
-func Serve(ctx context.Context, a agent.Agent, cfg Config, addr string) error {
+func Serve(ctx context.Context, a *agent.Agent, cfg Config, addr string) error {
 	limiter, err := newConnectionLimiter(cfg.MaxConnections)
 	if err != nil {
 		return err
@@ -90,7 +91,7 @@ func Serve(ctx context.Context, a agent.Agent, cfg Config, addr string) error {
 		}
 		go func() {
 			defer limiter.release()
-			handleConnection(ctx, server, cfg, a, conn)
+			handleConnection(ctx, serverWhoIser{server}, cfg, a, conn)
 		}()
 	}
 }
@@ -166,18 +167,65 @@ func newServer(cfg Config) (*tsnet.Server, error) {
 	}, nil
 }
 
-func handleConnection(ctx context.Context, server *tsnet.Server, cfg Config, a agent.Agent, conn net.Conn) {
+type peerIdentity struct{ login, node string }
+type whoIser interface {
+	WhoIs(context.Context, string) (*peerIdentity, error)
+}
+type serverWhoIser struct{ server *tsnet.Server }
+
+func (w serverWhoIser) WhoIs(ctx context.Context, address string) (*peerIdentity, error) {
+	client, err := w.server.LocalClient()
+	if err != nil {
+		return nil, fmt.Errorf("open local tailscale client: %w", err)
+	}
+	who, err := client.WhoIs(ctx, address)
+	if err != nil {
+		return nil, fmt.Errorf("resolve peer identity: %w", err)
+	}
+	if who == nil {
+		return nil, fmt.Errorf("empty peer identity")
+	}
+	identity := &peerIdentity{}
+	if who.UserProfile != nil {
+		identity.login = who.UserProfile.LoginName
+	}
+	if who.Node != nil {
+		identity.node = who.Node.Name
+	}
+	return identity, nil
+}
+
+func handleConnection(ctx context.Context, lookup whoIser, cfg Config, a *agent.Agent, conn net.Conn) {
 	defer conn.Close()
+	address := conn.RemoteAddr().String()
+	sessionCtx, cancel := context.WithTimeout(ctx, sessionTimeout(cfg.SessionTimeout))
+	defer cancel()
 	if err := conn.SetDeadline(time.Now().Add(sessionTimeout(cfg.SessionTimeout))); err != nil {
-		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: set session deadline: %v", conn.RemoteAddr(), err)
+		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: set session deadline: %v", address, err)
+		auditDenial(a, agent.Peer{Transport: "tsnet", Address: address})
 		return
 	}
-	if err := authorize(ctx, server, cfg, conn.RemoteAddr().String()); err != nil {
-		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: %v", conn.RemoteAddr(), err)
+	peer, err := authorize(sessionCtx, lookup, cfg, address)
+	if err != nil {
+		auditDenial(a, peer)
+		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: %v", address, err)
 		return
 	}
-	if err := agent.Serve(ctx, a, conn, conn); err != nil {
-		logf(cfg, "spectra-remote-agent session %s stopped: %v", conn.RemoteAddr(), err)
+	if err := agent.Serve(agent.WithPeer(sessionCtx, peer), a, conn, conn); err != nil {
+		logf(cfg, "spectra-remote-agent session %s stopped: %v", address, err)
+	}
+}
+
+func auditDenial(a *agent.Agent, peer agent.Peer) {
+	if a == nil || a.Auditor == nil {
+		return
+	}
+	at := time.Now()
+	if a.Now != nil {
+		at = a.Now()
+	}
+	if err := a.Auditor.Record(agent.AuditEvent{At: at.UTC(), Peer: peer, Stage: "denied", Outcome: "rejected", ErrorCode: protocol.CodePermissionDenied}); err != nil && a.Logf != nil {
+		a.Logf("audit denied write failed: %v", err)
 	}
 }
 
@@ -188,41 +236,32 @@ func sessionTimeout(timeout time.Duration) time.Duration {
 	return timeout
 }
 
-func authorize(ctx context.Context, server *tsnet.Server, cfg Config, remoteAddr string) error {
-	if len(cfg.AllowLogins) == 0 && len(cfg.AllowNodes) == 0 {
-		return nil
-	}
+func authorize(ctx context.Context, lookup whoIser, cfg Config, remoteAddr string) (agent.Peer, error) {
+	peer := agent.Peer{Transport: "tsnet", Address: remoteAddr}
 	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	client, err := server.LocalClient()
+	who, err := lookup.WhoIs(lookupCtx, remoteAddr)
 	if err != nil {
-		return fmt.Errorf("open local tailscale client: %w", err)
+		return peer, fmt.Errorf("resolve peer identity: %w", err)
 	}
-	who, err := client.WhoIs(lookupCtx, remoteAddr)
-	if err != nil {
-		return fmt.Errorf("resolve peer identity: %w", err)
+	if who == nil || (who.login == "" && who.node == "") {
+		return peer, fmt.Errorf("empty peer identity")
 	}
-	if who == nil {
-		return fmt.Errorf("empty peer identity")
-	}
-	login, node := "", ""
-	if who.UserProfile != nil {
-		login = normalize(who.UserProfile.LoginName)
-	}
-	if who.Node != nil {
-		node = normalize(who.Node.Name)
+	peer.LoginName, peer.NodeName = who.login, who.node
+	if len(cfg.AllowLogins) == 0 && len(cfg.AllowNodes) == 0 {
+		return peer, nil
 	}
 	for _, allowed := range cfg.AllowLogins {
-		if login != "" && login == normalize(allowed) {
-			return nil
+		if peer.LoginName != "" && normalize(peer.LoginName) == normalize(allowed) {
+			return peer, nil
 		}
 	}
 	for _, allowed := range cfg.AllowNodes {
-		if node != "" && node == normalize(allowed) {
-			return nil
+		if peer.NodeName != "" && normalize(peer.NodeName) == normalize(allowed) {
+			return peer, nil
 		}
 	}
-	return fmt.Errorf("peer is not on the target allowlist")
+	return peer, fmt.Errorf("peer is not on the target allowlist")
 }
 
 func normalize(value string) string {

@@ -117,3 +117,22 @@ func TestUninstallIgnoresMissingPlist(t *testing.T) {
 		t.Fatalf("Uninstall() error = %v", err)
 	}
 }
+
+func TestPlistSnapshotPolicyFlags(t *testing.T) {
+	opts := testOptions()
+	if strings.Contains(Plist(opts, "/Users/alice/Library/LaunchAgents/agent.plist"), "--allow-snapshot") {
+		t.Fatal("snapshot enabled by default")
+	}
+	opts.AllowSnapshotApps = true
+	if err := opts.Validate(); err == nil {
+		t.Fatal("accepted app policy without snapshot policy")
+	}
+	opts.AllowSnapshot = true
+	if err := opts.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	plist := Plist(opts, "/Users/alice/Library/LaunchAgents/agent.plist")
+	if !strings.Contains(plist, "--allow-snapshot</string>") || !strings.Contains(plist, "--allow-snapshot-apps</string>") {
+		t.Fatalf("missing flags: %s", plist)
+	}
+}

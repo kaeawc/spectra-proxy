@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,5 +88,46 @@ func TestRunInstallWritesOnlyExplicitLaunchAgentConfiguration(t *testing.T) {
 		if !strings.Contains(string(wrote), want) {
 			t.Fatalf("plist does not include %q:\n%s", want, wrote)
 		}
+	}
+}
+
+func TestSnapshotPolicyFlagDependency(t *testing.T) {
+	for _, command := range []string{"serve-stdio", "serve-tsnet", "install"} {
+		t.Run(command, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			args := []string{command, "--spectra", "/opt/spectra/bin/spectra", "--allow-snapshot-apps"}
+			if code := run(args, strings.NewReader(""), &out, &errout); code != 2 || !strings.Contains(errout.String(), "requires --allow-snapshot") {
+				t.Fatalf("code=%d stderr=%q", code, errout.String())
+			}
+		})
+	}
+}
+
+func TestStdioAuditIncludesLocalPeer(t *testing.T) {
+	dir := t.TempDir()
+	spectra := filepath.Join(dir, "spectra")
+	audit := filepath.Join(dir, "audit.jsonl")
+	script := `#!/bin/sh
+if [ "$1" = "capabilities" ] && [ "$2" = "--json" ]; then
+ printf '%s' '{"schema":{"name":"spectra.capabilities","version":1},"spectra_version":"test","interfaces":[]}'
+else
+ exit 1
+fi
+`
+	if err := os.WriteFile(spectra, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	input := strings.NewReader(`{"protocol_version":"v1","request_id":"health-1","operation":"health"}` + "\n")
+	code := run([]string{"serve-stdio", "--spectra", spectra, "--audit-log", audit}, input, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"transport":"stdio"`) || !strings.Contains(string(data), `"local_user"`) || strings.Count(string(data), "\n") != 2 {
+		t.Fatalf("audit=%s", data)
 	}
 }
