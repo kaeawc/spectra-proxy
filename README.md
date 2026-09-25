@@ -110,6 +110,13 @@ The target limits concurrent sessions to eight by default. Change the local
 LaunchAgent configuration deliberately with `--max-connections`; the value must
 be positive.
 
-Every target session also has a one-minute total deadline. That releases a
-session slot when an authenticated peer connects but never completes a typed
-request; the controller opens one short-lived session per call.
+Every target session also has a five-minute total deadline (`SessionTimeout`),
+plus a one-minute idle deadline (`IdleTimeout`) that is extended on every read
+and write. The idle deadline releases a session slot when an authenticated
+peer connects but stops sending or reading; the session deadline is a hard
+cap regardless of activity, so a still-running Spectra process (e.g. a slow
+snapshot) is eventually killed even if the peer keeps the connection busy.
+`--negotiate`'s extra health round trip and a subsequent diagnostic request
+both fit comfortably inside the session deadline as long as each individual
+step stays under the idle deadline. Neither timeout has a CLI flag yet; the
+controller opens one short-lived session per call.

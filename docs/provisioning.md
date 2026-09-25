@@ -22,11 +22,16 @@ redirect hosts are `objects.githubusercontent.com` and
 `release-assets.githubusercontent.com`.
 
 The release public key has not yet been generated, so no key is built in.
-Set a trusted `ed25519:<base64>` key before install, update, or rollback.
-Signed metadata is verified before the artifact is selected. A bad signature,
+Set a trusted `ed25519:<base64>` key before install or update. Signed
+metadata is verified before the artifact is selected. A bad signature,
 untrusted key, wrong version, or artifact digest mismatch aborts immediately
 without trying another source. Connection errors, 404s, and server errors may
 advance to the next configured source.
+
+Rollback does not use trusted keys and needs none configured: it downloads
+nothing. It switches back to the previous version already on disk, after
+re-verifying that binary's recorded SHA-256 and re-running the same
+`capabilities --json` compatibility check used by install and update.
 
 The default root is `~/Library/Application Support/Spectra Proxy/spectra` on
 macOS and `$XDG_DATA_HOME/spectra-proxy/spectra` elsewhere, falling back to
@@ -51,3 +56,39 @@ implemented. Each mutating operation clears stale staging contents at start.
 Status detects current binary drift. Rollback rehashes and checks compatibility
 again before switching. Uninstall requires recognized provisioning state and
 refuses to remove an unrelated directory.
+
+Interruption before activation - anything up to and including a failed
+`beforeCommit` hook, fetch, extraction, or compatibility check - leaves
+`current` and `state.json` completely untouched; only staged, not-yet-active
+files may be left behind, and those are cleared at the start of the next
+mutating operation. Activation itself is two steps: an atomic rename of the
+`current` symlink, then a `state.json` write recording the new version. A
+crash between those two steps leaves `current` pointing at a version that
+`state.json` does not (yet) call current. That is exactly the drift `status`
+detects (it compares the binary at `current` against the SHA-256 recorded for
+`state.json`'s current version) - `status` does not repair it, but re-running
+`install` or `update` for the version `current` now points at will, since
+that path recomputes and re-commits state from scratch. This is the only
+crash window covered; no other partial-write scenario is claimed to be
+detected or self-healing.
+
+Audit writes are best-effort for a request rejected before execution (an
+invalid request, a disallowed operation, an incompatible-Spectra probe): the
+write is attempted but its failure does not change the rejection response.
+Once a request begins executing, the "started" audit write is fail-closed -
+if it cannot be written, the request is aborted with an unavailable error
+before the local Spectra binary ever runs. This provisioning package does not
+itself audit; see the target agent's audit log for the corresponding
+protocol-side behavior.
+
+## Remote transport timeouts
+
+The `spectra-remote-agent serve-tsnet` transport - the protocol client of an
+installed Spectra binary, in the same repo as this provisioning package -
+bounds each tailnet session with two timeouts: a session timeout (default
+five minutes) capping total session length, and an idle timeout (default one
+minute) that is extended on every read and write. A session that goes idle
+for longer than the idle timeout is dropped; a session that runs longer than
+the session timeout is torn down regardless of activity, which also cancels
+any Spectra process still running for it. Today neither has a CLI flag; both
+take their defaults.
