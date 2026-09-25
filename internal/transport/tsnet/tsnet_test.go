@@ -145,6 +145,120 @@ func (sessionRunner) Inspect(context.Context, protocol.InspectParams) (json.RawM
 func (sessionRunner) SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
 }
+
+// blockingRunner's Inspect blocks until its context is canceled, simulating a
+// long-running Spectra process so tests can observe the session deadline
+// (not the idle timeout) tearing it down.
+type blockingRunner struct{}
+
+func (blockingRunner) Capabilities(context.Context) (agent.SpectraCapabilities, error) {
+	return agent.SpectraCapabilities{
+		Schema:         protocol.SchemaRef{Name: "spectra.capabilities", Version: 1},
+		SpectraVersion: "test",
+		Interfaces: []agent.SpectraInterface{
+			{Name: "inspect", ResultSchema: &protocol.SchemaRef{Name: protocol.SchemaInspect, Version: 1}},
+		},
+	}, nil
+}
+func (blockingRunner) Inspect(ctx context.Context, _ protocol.InspectParams) (json.RawMessage, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (blockingRunner) SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+
+const inspectRequest = `{"protocol_version":"v1","request_id":"r1","operation":"inspect","params":{"app_paths":["/Applications/A.app"]}}` + "\n"
+const healthRequest = `{"protocol_version":"v1","request_id":"r1","operation":"health"}` + "\n"
+
+func TestIdleTimeoutAllowsSequentialRequestsUnderCumulativeSum(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	lookup := &fakeWhoIs{identity: &peerIdentity{login: "alice@example.com", node: "alice-mac"}}
+	a := &agent.Agent{Runner: sessionRunner{}}
+	cfg := Config{SessionTimeout: 3 * time.Second, IdleTimeout: 200 * time.Millisecond}
+	done := make(chan struct{})
+	go func() {
+		handleConnection(context.Background(), lookup, cfg, a, server)
+		close(done)
+	}()
+	// Each gap between requests is under IdleTimeout, but their sum exceeds
+	// it; both requests must still succeed because the idle deadline is
+	// extended on every read/write, not fixed once for the whole session.
+	for i := 0; i < 2; i++ {
+		if _, err := client.Write([]byte(healthRequest)); err != nil {
+			t.Fatal(err)
+		}
+		var response protocol.Response
+		if err := json.NewDecoder(client).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Error != nil {
+			t.Fatalf("request %d: %+v", i, response.Error)
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not finish")
+	}
+}
+
+func TestIdleTimeoutDropsInactivePeer(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	lookup := &fakeWhoIs{identity: &peerIdentity{login: "alice@example.com", node: "alice-mac"}}
+	a := &agent.Agent{Runner: sessionRunner{}}
+	cfg := Config{SessionTimeout: 3 * time.Second, IdleTimeout: 100 * time.Millisecond}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		handleConnection(context.Background(), lookup, cfg, a, server)
+		close(done)
+	}()
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed >= cfg.SessionTimeout {
+			t.Fatalf("session ended after %s: expected the idle timeout, not the session cap, to end it", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle peer was not dropped")
+	}
+}
+
+func TestSessionTimeoutEndsSessionWellUnderIdleTimeout(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	lookup := &fakeWhoIs{identity: &peerIdentity{login: "alice@example.com", node: "alice-mac"}}
+	a := &agent.Agent{Runner: blockingRunner{}}
+	cfg := Config{SessionTimeout: 150 * time.Millisecond, IdleTimeout: 5 * time.Second}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		handleConnection(context.Background(), lookup, cfg, a, server)
+		close(done)
+	}()
+	if _, err := client.Write([]byte(inspectRequest)); err != nil {
+		t.Fatal(err)
+	}
+	var response protocol.Response
+	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error == nil || response.Error.Code != protocol.CodeTimeout {
+		t.Fatalf("response = %+v, want a timeout from the session deadline", response)
+	}
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed >= cfg.IdleTimeout {
+			t.Fatalf("session ended after %s: expected the session cap, not the idle timeout, to end it", elapsed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not end at the session cap")
+	}
+}
 func TestAuthorizedSessionAuditsAuthenticatedPeer(t *testing.T) {
 	server, client := net.Pipe()
 	defer client.Close()

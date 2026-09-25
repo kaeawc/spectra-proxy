@@ -20,7 +20,13 @@ import (
 const (
 	DefaultAddr           = ":7878"
 	DefaultMaxConnections = 8
-	DefaultSessionTimeout = time.Minute
+	// DefaultSessionTimeout bounds the whole session: with --negotiate, the
+	// controller's health round trip (a capabilities exec) plus a 30s
+	// diagnostic request must both fit inside it.
+	DefaultSessionTimeout = 5 * time.Minute
+	// DefaultIdleTimeout bounds how long the connection may go without
+	// forward progress (no bytes read or written) before it is dropped.
+	DefaultIdleTimeout = 60 * time.Second
 )
 
 // Config controls one managed tailnet node.
@@ -32,8 +38,18 @@ type Config struct {
 	AllowLogins    []string
 	AllowNodes     []string
 	MaxConnections int
+	// SessionTimeout is the hard cap on total session length. It bounds
+	// sessionCtx, so a running Spectra process is always eventually killed
+	// even if the peer keeps the connection busy.
 	SessionTimeout time.Duration
-	Logf           func(format string, args ...any)
+	// IdleTimeout bounds each read or write: it is how long the connection
+	// may go without forward progress before being dropped. It is extended
+	// on every Read and Write, up to the overall SessionTimeout, so a
+	// multi-request session (e.g. --negotiate's health call followed by a
+	// diagnostic request) is not cut short by one fixed session-wide
+	// deadline.
+	IdleTimeout time.Duration
+	Logf        func(format string, args ...any)
 }
 
 // DefaultStateDir returns a role-specific private state directory so an
@@ -200,7 +216,9 @@ func handleConnection(ctx context.Context, lookup whoIser, cfg Config, a *agent.
 	address := conn.RemoteAddr().String()
 	sessionCtx, cancel := context.WithTimeout(ctx, sessionTimeout(cfg.SessionTimeout))
 	defer cancel()
-	if err := conn.SetDeadline(time.Now().Add(sessionTimeout(cfg.SessionTimeout))); err != nil {
+	sessionDeadline, _ := sessionCtx.Deadline()
+	wrapped := &sessionConn{Conn: conn, idleTimeout: idleTimeout(cfg.IdleTimeout), sessionDeadline: sessionDeadline}
+	if err := conn.SetDeadline(wrapped.nextDeadline()); err != nil {
 		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: set session deadline: %v", address, err)
 		auditDenial(a, agent.Peer{Transport: "tsnet", Address: address})
 		return
@@ -211,9 +229,62 @@ func handleConnection(ctx context.Context, lookup whoIser, cfg Config, a *agent.
 		logf(cfg, "spectra-remote-agent rejected tailnet peer %s: %v", address, err)
 		return
 	}
-	if err := agent.Serve(agent.WithPeer(sessionCtx, peer), a, conn, conn); err != nil {
+	if err := agent.Serve(agent.WithPeer(sessionCtx, peer), a, wrapped, wrapped); err != nil {
 		logf(cfg, "spectra-remote-agent session %s stopped: %v", address, err)
 	}
+}
+
+// sessionConn extends a connection's read and write deadlines on every
+// operation, bounded by a fixed session deadline. This gives each
+// request/response an idle timeout - a peer that stops sending or reading is
+// dropped after IdleTimeout - while the session deadline still caps total
+// session length. Wrapping the conn this way, rather than threading the two
+// timeouts through agent.Serve, keeps the deadline policy entirely in the
+// transport: agent.Serve just reads and writes an io.Reader/io.Writer, and
+// the sessionCtx passed to it (bounded by the same session deadline) is what
+// kills a running Spectra process if the whole session runs out its clock.
+type sessionConn struct {
+	net.Conn
+	idleTimeout     time.Duration
+	sessionDeadline time.Time
+}
+
+// nextDeadline returns the earlier of "idle timeout from now" and the fixed
+// session deadline. It is used for the pre-authorization deadline and for
+// reads: once the session deadline has passed, a read must fail immediately
+// rather than wait out a fresh idle timeout, or a hung/slow peer would keep
+// the session (and its connection-limiter slot) alive well past the cap.
+func (c *sessionConn) nextDeadline() time.Time {
+	next := time.Now().Add(c.idleTimeout)
+	if next.After(c.sessionDeadline) {
+		return c.sessionDeadline
+	}
+	return next
+}
+
+// writeDeadline is deliberately not capped by the session deadline. The
+// response for the request that hit the session deadline (e.g. a
+// context.DeadlineExceeded failure) is computed and written only after that
+// deadline has already passed, so a write bounded by it would fail before a
+// single byte went out and the caller would get EOF instead of the failure
+// it earned. An idle timeout from now is still a hard backstop against a
+// peer that has stopped reading.
+func (c *sessionConn) writeDeadline() time.Time {
+	return time.Now().Add(c.idleTimeout)
+}
+
+func (c *sessionConn) Read(p []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(c.nextDeadline()); err != nil {
+		return 0, fmt.Errorf("extend read deadline: %w", err)
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *sessionConn) Write(p []byte) (int, error) {
+	if err := c.Conn.SetWriteDeadline(c.writeDeadline()); err != nil {
+		return 0, fmt.Errorf("extend write deadline: %w", err)
+	}
+	return c.Conn.Write(p)
 }
 
 func auditDenial(a *agent.Agent, peer agent.Peer) {
@@ -232,6 +303,13 @@ func auditDenial(a *agent.Agent, peer agent.Peer) {
 func sessionTimeout(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
 		return DefaultSessionTimeout
+	}
+	return timeout
+}
+
+func idleTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return DefaultIdleTimeout
 	}
 	return timeout
 }
