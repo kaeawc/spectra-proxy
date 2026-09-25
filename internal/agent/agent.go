@@ -16,7 +16,7 @@ import (
 
 // Runner performs only supported local diagnostic operations.
 type Runner interface {
-	Capabilities(context.Context) (SpectraCapabilities, error)
+	Capabilities(context.Context) (protocol.SpectraCapabilities, error)
 	Inspect(context.Context, protocol.InspectParams) (json.RawMessage, error)
 	SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error)
 }
@@ -52,7 +52,7 @@ type Agent struct {
 	Policy         Policy
 	Logf           func(string, ...any)
 	mu             sync.Mutex
-	capabilities   SpectraCapabilities
+	capabilities   protocol.SpectraCapabilities
 	capsErr        error
 	capsLoaded     bool
 	capsIdentity   string
@@ -61,7 +61,7 @@ type Agent struct {
 type preparedRequest struct {
 	inspect  protocol.InspectParams
 	snapshot protocol.SnapshotCreateParams
-	caps     SpectraCapabilities
+	caps     protocol.SpectraCapabilities
 	schema   protocol.SchemaRef
 }
 
@@ -126,9 +126,17 @@ func (a *Agent) prepareCompatible(ctx context.Context, op protocol.Operation, p 
 	var err error
 	p.caps, p.schema, err = a.compatible(ctx, op)
 	if err != nil {
-		return p, protocol.CodeIncompatibleSpectra, err
+		return p, compatibilityErrorCode(err), err
 	}
 	return p, "", nil
+}
+
+func compatibilityErrorCode(err error) protocol.ErrorCode {
+	var coded *protocol.CodedError
+	if errors.As(err, &coded) {
+		return protocol.CodeOf(err)
+	}
+	return protocol.CodeIncompatibleSpectra
 }
 
 func (a *Agent) runPrepared(ctx context.Context, req protocol.Request, p preparedRequest) protocol.Response {
@@ -155,19 +163,23 @@ func (a *Agent) completeAudit(ctx context.Context, req protocol.Request, respons
 	}
 }
 
-func (a *Agent) compatible(ctx context.Context, op protocol.Operation) (SpectraCapabilities, protocol.SchemaRef, error) {
+func (a *Agent) compatible(ctx context.Context, op protocol.Operation) (protocol.SpectraCapabilities, protocol.SchemaRef, error) {
 	caps, err := a.loadCapabilities(ctx, false)
 	if err != nil {
 		return caps, protocol.SchemaRef{}, fmt.Errorf("probe Spectra capabilities: %w", err)
 	}
-	schema, err := caps.resultSchema(op)
+	schema, err := caps.ResultSchemaFor(op)
 	if err != nil {
+		var coded *protocol.CodedError
+		if errors.As(err, &coded) {
+			return caps, schema, fmt.Errorf("%s: %w", coded.Code, err)
+		}
 		return caps, schema, fmt.Errorf("check Spectra result schema: %w", err)
 	}
 	return caps, schema, nil
 }
 
-func (a *Agent) loadCapabilities(ctx context.Context, refresh bool) (SpectraCapabilities, error) {
+func (a *Agent) loadCapabilities(ctx context.Context, refresh bool) (protocol.SpectraCapabilities, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	identity, identityErr := a.binaryIdentity()
@@ -178,8 +190,8 @@ func (a *Agent) loadCapabilities(ctx context.Context, refresh bool) (SpectraCapa
 		a.capabilities, a.capsErr = a.Runner.Capabilities(ctx)
 		a.capsLoaded = true
 		a.capsIdentity = identity
-		if a.capsErr == nil && (a.capabilities.Schema.Name != "spectra.capabilities" || a.capabilities.Schema.Version != 1) {
-			a.capsErr = fmt.Errorf("unsupported Spectra capabilities schema")
+		if a.capsErr == nil {
+			a.capsErr = a.capabilities.Validate()
 		}
 	}
 	return a.capabilities, a.capsErr
@@ -198,7 +210,7 @@ func (a *Agent) binaryIdentity() (string, error) {
 }
 
 func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Response {
-	var caps SpectraCapabilities
+	var caps protocol.SpectraCapabilities
 	var err error
 	if a.Runner != nil {
 		caps, err = a.loadCapabilities(ctx, true)
@@ -216,7 +228,7 @@ func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Respo
 			if op == protocol.OperationSnapshotCreate && !a.Policy.AllowSnapshot {
 				continue
 			}
-			if schema, schemaErr := caps.resultSchema(op); schemaErr == nil {
+			if schema, schemaErr := caps.ResultSchemaFor(op); schemaErr == nil {
 				manifest.Operations = append(manifest.Operations, protocol.OperationCapability{Name: op, ResultSchema: &schema})
 			}
 		}

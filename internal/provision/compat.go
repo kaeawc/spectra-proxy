@@ -3,7 +3,6 @@ package provision
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -60,23 +59,11 @@ func (e *IncompatibleError) Error() string {
 }
 func (e *IncompatibleError) Unwrap() error { return e.Err }
 
-type schemaRef struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
-}
-type capabilityInterface struct {
-	Name         string    `json:"name"`
-	ResultSchema schemaRef `json:"result_schema"`
-}
-type capabilities struct {
-	Schema         schemaRef             `json:"schema"`
-	SpectraVersion string                `json:"spectra_version"`
-	OS             string                `json:"os"`
-	Arch           string                `json:"arch"`
-	Interfaces     []capabilityInterface `json:"interfaces"`
+func checkCapabilities(ctx context.Context, runner Runner, binary, version string, schemaVersion int) error {
+	return checkCapabilitiesForOS(ctx, runner, binary, version, schemaVersion, runtime.GOOS)
 }
 
-func checkCapabilities(ctx context.Context, runner Runner, binary, version string, schemaVersion int) error {
+func checkCapabilitiesForOS(ctx context.Context, runner Runner, binary, version string, schemaVersion int, goos string) error {
 	data, err := runner.Capabilities(ctx, binary)
 	if err != nil {
 		return &IncompatibleError{Check: "capabilities command", Err: err}
@@ -84,62 +71,33 @@ func checkCapabilities(ctx context.Context, runner Runner, binary, version strin
 	if len(data) > maxCapabilitiesBytes {
 		return &IncompatibleError{Check: "capabilities output size"}
 	}
-	var c capabilities
-	if err := json.Unmarshal(data, &c); err != nil {
+	c, err := protocolv1.DecodeSpectraCapabilities(data)
+	if err != nil {
 		return &IncompatibleError{Check: "capabilities JSON", Err: err}
 	}
-	if c.Schema.Name != "spectra.capabilities" {
-		return &IncompatibleError{Check: fmt.Sprintf("capabilities schema name %q", c.Schema.Name)}
-	}
-	if c.Schema.Version != schemaVersion || c.Schema.Version > supportedCapabilitiesSchemaVersion {
-		return &IncompatibleError{Check: fmt.Sprintf("capabilities schema version %d, manifest %d, supported max %d", c.Schema.Version, schemaVersion, supportedCapabilitiesSchemaVersion)}
+	if c.Schema.Version != schemaVersion || c.Schema.Version != protocolv1.CapabilitiesSchemaVersion {
+		return &IncompatibleError{Check: fmt.Sprintf("capabilities schema version %d, manifest %d, supported %d", c.Schema.Version, schemaVersion, protocolv1.CapabilitiesSchemaVersion)}
 	}
 	if c.SpectraVersion != version {
 		return &IncompatibleError{Check: fmt.Sprintf("spectra_version %q, expected %q", c.SpectraVersion, version)}
 	}
-	if c.OS != runtime.GOOS {
-		return &IncompatibleError{Check: fmt.Sprintf("os %q, expected %q", c.OS, runtime.GOOS)}
+	if c.OS != goos {
+		return &IncompatibleError{Check: fmt.Sprintf("os %q, expected %q", c.OS, goos)}
 	}
 	if c.Arch != runtime.GOARCH {
 		return &IncompatibleError{Check: fmt.Sprintf("arch %q, expected %q", c.Arch, runtime.GOARCH)}
 	}
-	return checkInterfaces(c.Interfaces, c.OS)
-}
-
-// checkInterfaces requires the snapshot interface unconditionally and the
-// inspect interface only when the manifest reports darwin: Spectra core's
-// `capabilities --json` no longer advertises inspect on other OSes, since
-// inspect is macOS-only. If inspect IS present on any OS it must still carry
-// the supported spectra.inspect result-schema version, so a stray or
-// mismatched inspect entry is still rejected everywhere.
-func checkInterfaces(interfaces []capabilityInterface, manifestOS string) error {
-	if err := checkInterface(interfaces, protocolv1.SchemaSnapshot, true); err != nil {
-		return err
+	if _, err := c.ResultSchemaFor(protocolv1.OperationSnapshotCreate); err != nil {
+		return &IncompatibleError{Check: "snapshot interface", Err: err}
 	}
-	return checkInterface(interfaces, protocolv1.SchemaInspect, manifestOS == "darwin")
-}
-
-func checkInterface(interfaces []capabilityInterface, schema string, required bool) error {
-	name := "inspect"
-	if schema == protocolv1.SchemaSnapshot {
-		name = "snapshot"
-	}
-	want, _ := protocolv1.SupportedResultSchemaVersion(schema)
-	var mismatched *capabilityInterface
-	for _, iface := range interfaces {
-		if iface.Name != name {
-			continue
+	if goos == "darwin" {
+		if _, err := c.ResultSchemaFor(protocolv1.OperationInspect); err != nil {
+			return &IncompatibleError{Check: "inspect interface", Err: err}
 		}
-		if iface.ResultSchema.Name == schema && iface.ResultSchema.Version == want {
-			return nil
+	} else if _, ok := c.Interface(protocolv1.InterfaceInspect); ok {
+		if _, err := c.ResultSchemaFor(protocolv1.OperationInspect); err != nil {
+			return &IncompatibleError{Check: "inspect interface", Err: err}
 		}
-		mismatched = &iface
 	}
-	if mismatched != nil {
-		return &IncompatibleError{Check: fmt.Sprintf("%s result_schema %q version %d, expected %q version %d", name, mismatched.ResultSchema.Name, mismatched.ResultSchema.Version, schema, want)}
-	}
-	if !required {
-		return nil
-	}
-	return &IncompatibleError{Check: fmt.Sprintf("missing %s interface", name)}
+	return nil
 }

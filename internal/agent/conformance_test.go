@@ -4,11 +4,49 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 	"github.com/kaeawc/spectra-protocol/protocol/v1/conformance"
 )
+
+func TestSpectraCapabilitiesConformance(t *testing.T) {
+	cases, err := conformance.CasesOf("spectra_capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			caps, err := protocol.DecodeSpectraCapabilities(tc.Input)
+			if !tc.Valid && err != nil {
+				var coded *protocol.CodedError
+				if !errors.As(err, &coded) || coded.Code != tc.ErrorCode {
+					t.Fatalf("decode error = %v, want %s", err, tc.ErrorCode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.Operation == "" || tc.Operation == protocol.OperationHealth {
+				return
+			}
+			a := &Agent{Runner: fakeRunner{caps: caps}, Policy: Policy{AllowSnapshot: true}}
+			params := json.RawMessage(`{"app_paths":["/Applications/Test.app"]}`)
+			if tc.Operation == protocol.OperationSnapshotCreate {
+				params = json.RawMessage(`{}`)
+			}
+			response := a.Handle(context.Background(), protocol.Request{ProtocolVersion: protocol.Version, RequestID: "conformance", Operation: tc.Operation, Params: params})
+			if tc.Valid && response.Error != nil {
+				t.Fatalf("valid case rejected: %+v", response.Error)
+			}
+			if !tc.Valid && (response.Error == nil || response.Error.Code != tc.ErrorCode) {
+				t.Fatalf("error = %+v, want %s", response.Error, tc.ErrorCode)
+			}
+		})
+	}
+}
 
 func TestRequestConformanceThroughServe(t *testing.T) {
 	cases, err := conformance.CasesOf("request")

@@ -190,8 +190,8 @@ func (h *harness) verifySpectra(binary, version string) error {
 	if err != nil {
 		return fmt.Errorf("SPECTRA_CORE_DIR does not provide `spectra capabilities --json` (required by the proxy): %w", err)
 	}
-	var caps agent.SpectraCapabilities
-	if err := json.Unmarshal(out, &caps); err != nil || caps.Schema.Name != "spectra.capabilities" || caps.SpectraVersion != version {
+	caps, err := protocol.DecodeSpectraCapabilities(out)
+	if err != nil || caps.SpectraVersion != version {
 		return fmt.Errorf("unexpected capabilities output %s: %v", out, err)
 	}
 	return nil

@@ -139,7 +139,7 @@ func writeProvisionedSpectra(t *testing.T) (root, binary string) {
 	if err := os.MkdirAll(version, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nprintf '%s' '{\"schema\":{\"name\":\"spectra.capabilities\",\"version\":1},\"spectra_version\":\"v1.0.0\",\"interfaces\":[]}'\n"
+	script := "#!/bin/sh\nprintf '%s' '{\"schema\":{\"name\":\"spectra.capabilities\",\"version\":1},\"spectra_version\":\"v1.0.0\",\"os\":\"darwin\",\"arch\":\"arm64\",\"interfaces\":[{\"name\":\"capabilities\",\"argv\":[\"capabilities\",\"--json\"],\"output\":\"json\",\"result_schema\":{\"name\":\"spectra.capabilities\",\"version\":1}}]}'\n"
 	if err := os.WriteFile(filepath.Join(version, "spectra"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

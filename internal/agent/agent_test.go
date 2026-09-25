@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -13,25 +14,25 @@ import (
 )
 
 type fakeRunner struct {
-	caps     SpectraCapabilities
+	caps     protocol.SpectraCapabilities
 	capsErr  error
 	inspect  func(context.Context, protocol.InspectParams) (json.RawMessage, error)
 	snapshot func(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error)
 }
 
-func fixtureCaps(t *testing.T) SpectraCapabilities {
+func fixtureCaps(t *testing.T) protocol.SpectraCapabilities {
 	t.Helper()
 	data, err := os.ReadFile("testdata/core-capabilities.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var caps SpectraCapabilities
-	if err := json.Unmarshal(data, &caps); err != nil {
+	caps, err := protocol.DecodeSpectraCapabilities(data)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return caps
 }
-func (f fakeRunner) Capabilities(context.Context) (SpectraCapabilities, error) {
+func (f fakeRunner) Capabilities(context.Context) (protocol.SpectraCapabilities, error) {
 	return f.caps, f.capsErr
 }
 func (f fakeRunner) Inspect(ctx context.Context, p protocol.InspectParams) (json.RawMessage, error) {
@@ -52,12 +53,12 @@ func (f fakeRunner) SnapshotCreate(ctx context.Context, p protocol.SnapshotCreat
 // both its identity and its capabilities can be changed between calls.
 type identityRunner struct {
 	identity string
-	caps     SpectraCapabilities
+	caps     protocol.SpectraCapabilities
 	capsErr  error
 }
 
 func (r *identityRunner) BinaryIdentity() (string, error) { return r.identity, nil }
-func (r *identityRunner) Capabilities(context.Context) (SpectraCapabilities, error) {
+func (r *identityRunner) Capabilities(context.Context) (protocol.SpectraCapabilities, error) {
 	return r.caps, r.capsErr
 }
 func (r *identityRunner) Inspect(context.Context, protocol.InspectParams) (json.RawMessage, error) {
@@ -88,6 +89,17 @@ func code(t *testing.T, r protocol.Response, want protocol.ErrorCode) {
 		t.Fatalf("response error = %+v, want %s", r.Error, want)
 	}
 }
+
+func TestCompatibilityErrorCode(t *testing.T) {
+	coded := &protocol.CodedError{Code: protocol.CodeUnsupportedOperation, Err: errors.New("unsupported")}
+	if got := compatibilityErrorCode(fmt.Errorf("compatibility check: %w", coded)); got != protocol.CodeUnsupportedOperation {
+		t.Errorf("compatibilityErrorCode(wrapped coded error) = %q, want %q", got, protocol.CodeUnsupportedOperation)
+	}
+	if got := compatibilityErrorCode(errors.New("boom")); got != protocol.CodeIncompatibleSpectra {
+		t.Errorf("compatibilityErrorCode(plain error) = %q, want %q", got, protocol.CodeIncompatibleSpectra)
+	}
+}
+
 func healthManifest(t *testing.T, a *Agent) protocol.CapabilityManifest {
 	t.Helper()
 	resp := a.Handle(context.Background(), request(protocol.OperationHealth, ""))
@@ -144,18 +156,18 @@ func TestSnapshotPolicyAndCapabilityCompatibility(t *testing.T) {
 func TestIncompatibleSpectra(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		change func(*SpectraCapabilities)
+		change func(*protocol.SpectraCapabilities)
 		err    error
 		op     protocol.Operation
 	}{
-		{"schema version", func(c *SpectraCapabilities) {
+		{"schema version", func(c *protocol.SpectraCapabilities) {
 			for i := range c.Interfaces {
 				if c.Interfaces[i].Name == "snapshot" {
 					c.Interfaces[i].ResultSchema.Version = 2
 				}
 			}
 		}, nil, protocol.OperationSnapshotCreate},
-		{"missing snapshot", func(c *SpectraCapabilities) { c.Interfaces = c.Interfaces[:2] }, nil, protocol.OperationSnapshotCreate},
+		{"missing snapshot", func(c *protocol.SpectraCapabilities) { c.Interfaces = c.Interfaces[:2] }, nil, protocol.OperationSnapshotCreate},
 		{"capabilities call failed", nil, errors.New("unknown command"), protocol.OperationInspect},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

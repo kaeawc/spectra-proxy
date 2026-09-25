@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 	release "github.com/kaeawc/spectra-protocol/release/v1"
 )
 
@@ -84,18 +85,25 @@ func fixture(t *testing.T, version string, private ed25519.PrivateKey, entries [
 	return releaseFixture{manifest, sig, archive, a}
 }
 
-type fakeRunner struct{ change func(*capabilities) }
+type fakeRunner struct {
+	change func(*protocol.SpectraCapabilities)
+}
 
 func (r fakeRunner) Capabilities(_ context.Context, binary string) ([]byte, error) {
 	data, err := os.ReadFile(binary)
 	if err != nil {
 		return nil, err
 	}
-	c := capabilities{Schema: schemaRef{"spectra.capabilities", 1}, SpectraVersion: string(data), OS: runtime.GOOS, Arch: runtime.GOARCH, Interfaces: []capabilityInterface{{Name: "inspect", ResultSchema: schemaRef{"spectra.inspect", 1}}, {Name: "snapshot", ResultSchema: schemaRef{"spectra.snapshot", 1}}}}
+	c := validCapabilitiesFromVersion(string(data))
 	if r.change != nil {
 		r.change(&c)
 	}
 	return json.Marshal(c)
+}
+
+func validCapabilitiesFromVersion(version string) protocol.SpectraCapabilities {
+	inspect, snapshot, capabilities := protocol.SchemaRef{Name: protocol.SchemaInspect, Version: 1}, protocol.SchemaRef{Name: protocol.SchemaSnapshot, Version: 1}, protocol.SchemaRef{Name: protocol.SchemaCapabilities, Version: 1}
+	return protocol.SpectraCapabilities{Schema: protocol.SchemaRef{Name: protocol.SchemaCapabilities, Version: protocol.CapabilitiesSchemaVersion}, SpectraVersion: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Interfaces: []protocol.SpectraInterface{{Name: protocol.InterfaceInspect, Output: protocol.OutputJSON, ResultSchema: &inspect}, {Name: protocol.InterfaceSnapshot, Output: protocol.OutputJSON, ResultSchema: &snapshot}, {Name: protocol.InterfaceCapabilities, Output: protocol.OutputJSON, ResultSchema: &capabilities}}}
 }
 
 type testServer struct {
@@ -278,7 +286,7 @@ func TestRollbackRejectsTamperedOrIncompatiblePrevious(t *testing.T) {
 	if err := os.WriteFile(previous, []byte("v1.0.0"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	o.Runner = fakeRunner{change: func(c *capabilities) { c.Schema.Version = 2 }}
+	o.Runner = fakeRunner{change: func(c *protocol.SpectraCapabilities) { c.Schema.Version = 2 }}
 	if _, err := Rollback(context.Background(), o); err == nil {
 		t.Fatal("incompatible rollback accepted")
 	}

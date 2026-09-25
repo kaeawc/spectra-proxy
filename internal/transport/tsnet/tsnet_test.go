@@ -136,8 +136,8 @@ func TestDeniedConnectionIsAudited(t *testing.T) {
 
 type sessionRunner struct{}
 
-func (sessionRunner) Capabilities(context.Context) (agent.SpectraCapabilities, error) {
-	return agent.SpectraCapabilities{Schema: protocol.SchemaRef{Name: "spectra.capabilities", Version: 1}, SpectraVersion: "test"}, nil
+func (sessionRunner) Capabilities(context.Context) (protocol.SpectraCapabilities, error) {
+	return protocol.SpectraCapabilities{}, nil
 }
 func (sessionRunner) Inspect(context.Context, protocol.InspectParams) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil
@@ -151,14 +151,10 @@ func (sessionRunner) SnapshotCreate(context.Context, protocol.SnapshotCreatePara
 // (not the idle timeout) tearing it down.
 type blockingRunner struct{}
 
-func (blockingRunner) Capabilities(context.Context) (agent.SpectraCapabilities, error) {
-	return agent.SpectraCapabilities{
-		Schema:         protocol.SchemaRef{Name: "spectra.capabilities", Version: 1},
-		SpectraVersion: "test",
-		Interfaces: []agent.SpectraInterface{
-			{Name: "inspect", ResultSchema: &protocol.SchemaRef{Name: protocol.SchemaInspect, Version: 1}},
-		},
-	}, nil
+func (blockingRunner) Capabilities(context.Context) (protocol.SpectraCapabilities, error) {
+	inspect := protocol.SchemaRef{Name: protocol.SchemaInspect, Version: 1}
+	capabilities := protocol.SchemaRef{Name: protocol.SchemaCapabilities, Version: protocol.CapabilitiesSchemaVersion}
+	return protocol.SpectraCapabilities{Schema: capabilities, SpectraVersion: "test", OS: "darwin", Arch: "arm64", Interfaces: []protocol.SpectraInterface{{Name: protocol.InterfaceInspect, Output: protocol.OutputJSON, ResultSchema: &inspect}, {Name: protocol.InterfaceCapabilities, Output: protocol.OutputJSON, ResultSchema: &capabilities}}}, nil
 }
 func (blockingRunner) Inspect(ctx context.Context, _ protocol.InspectParams) (json.RawMessage, error) {
 	<-ctx.Done()

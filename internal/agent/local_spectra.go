@@ -21,17 +21,14 @@ type LocalSpectra struct {
 	AllowedAppRoots []string
 }
 
-func (s LocalSpectra) Capabilities(ctx context.Context) (SpectraCapabilities, error) {
+func (s LocalSpectra) Capabilities(ctx context.Context) (protocol.SpectraCapabilities, error) {
 	out, err := s.runJSON(ctx, "capabilities", "--json")
 	if err != nil {
-		return SpectraCapabilities{}, fmt.Errorf("run Spectra capabilities: %w", err)
+		return protocol.SpectraCapabilities{}, fmt.Errorf("run Spectra capabilities: %w", err)
 	}
-	var caps SpectraCapabilities
-	if err := json.Unmarshal(out, &caps); err != nil {
-		return SpectraCapabilities{}, fmt.Errorf("decode Spectra capabilities: %w", err)
-	}
-	if caps.Schema.Name != "spectra.capabilities" || caps.Schema.Version != 1 {
-		return SpectraCapabilities{}, fmt.Errorf("unsupported Spectra capabilities schema %q version %d", caps.Schema.Name, caps.Schema.Version)
+	caps, err := protocol.DecodeSpectraCapabilities(out)
+	if err != nil {
+		return protocol.SpectraCapabilities{}, fmt.Errorf("decode Spectra capabilities: %w", err)
 	}
 	return caps, nil
 }
