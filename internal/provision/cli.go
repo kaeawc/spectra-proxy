@@ -35,14 +35,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if parsed.root != "" {
-		c.Root = parsed.root
-	}
-	if len(parsed.sources) > 0 {
-		c.Sources = parsed.sources
-	}
-	c.TrustedKeys = append(c.TrustedKeys, parsed.keys...)
-	c.AllowedRedirectHosts = append(c.AllowedRedirectHosts, parsed.redirects...)
+	applyOverrides(&c, parsed)
 	if err := runCommand(ctx, command, parsed, Options{Config: c}, stdout); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -50,10 +43,24 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func applyOverrides(c *Config, parsed cliArgs) {
+	if parsed.root != "" {
+		c.Root = parsed.root
+	}
+	if len(parsed.sources) > 0 {
+		c.Sources = parsed.sources
+	}
+	if parsed.sourceCAFile != "" {
+		c.SourceCAFile = parsed.sourceCAFile
+	}
+	c.TrustedKeys = append(c.TrustedKeys, parsed.keys...)
+	c.AllowedRedirectHosts = append(c.AllowedRedirectHosts, parsed.redirects...)
+}
+
 type cliArgs struct {
-	configPath, root, version string
-	jsonOutput                bool
-	sources, keys, redirects  repeated
+	configPath, root, version, sourceCAFile string
+	jsonOutput                              bool
+	sources, keys, redirects                repeated
 }
 
 func parseCLI(command string, args []string, stderr io.Writer) (cliArgs, int) {
@@ -67,6 +74,7 @@ func parseCLI(command string, args []string, stderr io.Writer) (cliArgs, int) {
 	fs.Var(&parsed.sources, "source", "release source (repeatable)")
 	fs.Var(&parsed.keys, "trusted-key", "trusted release key (repeatable)")
 	fs.Var(&parsed.redirects, "allow-redirect-host", "allowed redirect host (repeatable)")
+	fs.StringVar(&parsed.sourceCAFile, "source-ca-file", "", "PEM certificates that replace the system roots for source TLS")
 	if err := fs.Parse(args); err != nil {
 		return parsed, 2
 	}

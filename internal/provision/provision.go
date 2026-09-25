@@ -45,6 +45,13 @@ func (o Options) normalized() (Options, error) {
 		return o, err
 	}
 	o.Config = c
+	if c.SourceCAFile != "" {
+		pool, err := loadSourceCAs(c.SourceCAFile)
+		if err != nil {
+			return o, err
+		}
+		o.Client = withSourceRoots(o.Client, pool)
+	}
 	if o.Runner == nil {
 		o.Runner = commandRunner{}
 	}

@@ -19,6 +19,8 @@ type Config struct {
 	TrustedKeys          []string `json:"trusted_keys"`
 	AllowedRedirectHosts []string `json:"allowed_redirect_hosts"`
 	KeepVersions         int      `json:"keep_versions"`
+	// SourceCAFile replaces the system roots for source TLS, for private mirrors.
+	SourceCAFile string `json:"source_ca_file"`
 }
 
 // The Spectra release public key will be added after it is generated and distributed.
@@ -57,6 +59,15 @@ func resolveDefaults(c Config, home func() (string, error), getenv func(string) 
 
 func resolveConfig(c Config) (Config, error) {
 	return resolveDefaults(c, os.UserHomeDir, os.Getenv, runtime.GOOS)
+}
+
+// DefaultRoot returns the provisioning root used when none is configured.
+func DefaultRoot() (string, error) {
+	c, err := resolveConfig(Config{})
+	if err != nil {
+		return "", err
+	}
+	return c.Root, nil
 }
 
 func LoadConfig(path string) (Config, error) {
