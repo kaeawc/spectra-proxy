@@ -17,6 +17,7 @@ import (
 
 	"github.com/kaeawc/spectra-proxy/internal/agent"
 	"github.com/kaeawc/spectra-proxy/internal/agentinstall"
+	"github.com/kaeawc/spectra-proxy/internal/provision"
 	remoteTSNet "github.com/kaeawc/spectra-proxy/internal/transport/tsnet"
 )
 
@@ -47,16 +48,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runTSNet(args[1:], stderr)
 	case "install":
 		return runInstall(args[1:], stdout, stderr)
+	case "provision":
+		return runProvision(args[1:], stdout, stderr)
 	default:
 		printUsage(stderr)
 		return 2
 	}
 }
 
+func runProvision(args []string, stdout, stderr io.Writer) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return provision.Run(ctx, args, stdout, stderr)
+}
+
 func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("spectra-remote-agent serve-stdio", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	spectraPath := fs.String("spectra", "", "Absolute path to the local spectra executable")
+	spectraPath := fs.String("spectra", "", "Absolute path to the local spectra executable (default: provisioned Spectra)")
+	provisionRoot := fs.String("provision-root", "", "Provisioning root used to find Spectra when --spectra is omitted")
 	auditLog, err := defaultAuditLogPath()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -74,7 +84,11 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--allow-snapshot-apps requires --allow-snapshot")
 		return 2
 	}
-	a, ok := newAgent(*spectraPath, appRoots, auditLog, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
+	resolved, code := resolveSpectraPath(*spectraPath, *provisionRoot, stderr)
+	if code != 0 {
+		return code
+	}
+	a, ok := newAgent(resolved, appRoots, auditLog, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
 	if !ok {
 		return 2
 	}
@@ -192,6 +206,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 
 type tsnetOptions struct {
 	spectraPath       string
+	provisionRoot     string
 	listenAddr        string
 	hostname          string
 	stateDir          string
@@ -207,7 +222,7 @@ type tsnetOptions struct {
 	allowSnapshotApps bool
 }
 
-func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad bool) (tsnetOptions, int) {
+func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad bool) (opts tsnetOptions, code int) {
 	stateDir, err := remoteTSNet.DefaultStateDir("agent")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -218,10 +233,11 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, err)
 		return tsnetOptions{}, 1
 	}
-	opts := tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog, maxConnections: remoteTSNet.DefaultMaxConnections}
+	opts = tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog, maxConnections: remoteTSNet.DefaultMaxConnections}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&opts.spectraPath, "spectra", "", "Absolute path to the local spectra executable")
+	fs.StringVar(&opts.spectraPath, "spectra", "", "Absolute path to the local spectra executable (default: provisioned Spectra)")
+	fs.StringVar(&opts.provisionRoot, "provision-root", "", "Provisioning root used to find Spectra when --spectra is omitted")
 	fs.StringVar(&opts.listenAddr, "tsnet-addr", opts.listenAddr, "Tailnet listen address")
 	fs.StringVar(&opts.hostname, "tsnet-hostname", opts.hostname, "Tailnet node hostname")
 	fs.StringVar(&opts.stateDir, "tsnet-state-dir", opts.stateDir, "Private tsnet state directory")
@@ -252,7 +268,34 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, "max-connections must be positive")
 		return tsnetOptions{}, 2
 	}
-	return opts, 0
+	opts.spectraPath, code = resolveSpectraPath(opts.spectraPath, opts.provisionRoot, stderr)
+	return opts, code
+}
+
+// resolveSpectraPath defaults an omitted --spectra to the provisioned
+// executable. The current symlink path is kept unresolved so a LaunchAgent
+// follows later updates and rollbacks.
+func resolveSpectraPath(spectraPath, provisionRoot string, stderr io.Writer) (string, int) {
+	if spectraPath != "" {
+		return spectraPath, 0
+	}
+	if provisionRoot == "" {
+		root, err := provision.DefaultRoot()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return "", 1
+		}
+		provisionRoot = root
+	} else if !filepath.IsAbs(provisionRoot) {
+		fmt.Fprintln(stderr, "--provision-root must be absolute")
+		return "", 2
+	}
+	candidate := provision.BinaryPath(provisionRoot)
+	if _, err := os.Stat(candidate); err != nil {
+		// newAgent reports the missing --spectra path.
+		return "", 0
+	}
+	return candidate, 0
 }
 
 func newAgent(spectraPath string, appRoots pathList, auditLog string, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
@@ -283,10 +326,12 @@ func defaultAuditLogPath() (string, error) {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: spectra-remote-agent serve-stdio --spectra /absolute/path [--allow-app-root /Applications]")
-	fmt.Fprintln(w, "   or: spectra-remote-agent serve-tsnet --spectra /absolute/path --tsnet-hostname name [--allow-app-root /Applications]")
-	fmt.Fprintln(w, "   or: spectra-remote-agent install --spectra /absolute/path --tsnet-hostname name [--no-load]")
+	fmt.Fprintln(w, "usage: spectra-remote-agent serve-stdio [--spectra /absolute/path] [--allow-app-root /Applications]")
+	fmt.Fprintln(w, "   or: spectra-remote-agent serve-tsnet [--spectra /absolute/path] --tsnet-hostname name [--allow-app-root /Applications]")
+	fmt.Fprintln(w, "   or: spectra-remote-agent install [--spectra /absolute/path] --tsnet-hostname name [--no-load]")
 	fmt.Fprintln(w, "   or: spectra-remote-agent install status|uninstall")
+	fmt.Fprintln(w, "   or: spectra-remote-agent provision install|update|rollback|status|uninstall [flags]")
+	fmt.Fprintln(w, "--spectra defaults to the provisioned executable when one is installed (see --provision-root).")
 }
 
 type stringList []string
