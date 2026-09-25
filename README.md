@@ -65,6 +65,10 @@ parameters, and `3` for a protocol or incompatible schema error. A successful
 result for an operation the controller has no result schema for is a protocol
 error (`3`) and is not printed.
 
+`spectra-remote call` defaults `--timeout` to 3 minutes so a default call can
+outlast a real `spectra snapshot`, which can take 78-98s on a used Mac; raise
+it further with `--timeout` for a slower target.
+
 When `--spectra` is omitted, `serve-stdio`, `serve-tsnet`, and `install` use
 the provisioned executable (`<root>/current/spectra`) if one is installed,
 where the root is the provisioning default or `--provision-root`. Install it
@@ -129,3 +133,10 @@ snapshot) is eventually killed even if the peer keeps the connection busy.
 both fit comfortably inside the session deadline as long as each individual
 step stays under the idle deadline. Neither timeout has a CLI flag yet; the
 controller opens one short-lived session per call.
+
+Each request the agent runs is separately capped by `--max-run-duration`
+(default 3 minutes on `serve-stdio`, `serve-tsnet`, and `install`), sized for
+a real `spectra snapshot` rather than a quick health or inspect call. On
+`serve-tsnet` and `install` it must stay strictly under the five-minute
+`SessionTimeout` above, or a still-running request would be killed by the
+transport before the agent's own cap ever had a chance to fire.

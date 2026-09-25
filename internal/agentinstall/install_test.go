@@ -5,6 +5,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/kaeawc/spectra-proxy/internal/transport/tsnet"
 )
 
 func testOptions() Options {
@@ -16,6 +19,7 @@ func testOptions() Options {
 		StateDir:       "/Users/alice/.spectra-remote/tsnet/agent",
 		AuditLog:       "/Users/alice/Library/Logs/Spectra Remote/agent.audit.jsonl",
 		MaxConnections: 8,
+		MaxRunDuration: DefaultMaxRunDuration,
 		AppRoots:       []string{"/Applications"},
 		AllowLogins:    []string{"engineer@example.com"},
 	}
@@ -115,6 +119,46 @@ func TestUninstallIgnoresMissingPlist(t *testing.T) {
 	}
 	if err := Uninstall(deps); err != nil {
 		t.Fatalf("Uninstall() error = %v", err)
+	}
+}
+
+func TestPlistOmitsMaxRunDurationAtDefault(t *testing.T) {
+	plist := Plist(testOptions(), "/Users/alice/Library/LaunchAgents/"+Label+".plist")
+	if strings.Contains(plist, "--max-run-duration") {
+		t.Fatalf("plist includes --max-run-duration at the default value:\n%s", plist)
+	}
+}
+
+func TestPlistIncludesExplicitMaxRunDuration(t *testing.T) {
+	opts := testOptions()
+	opts.MaxRunDuration = 90 * time.Second
+	plist := Plist(opts, "/Users/alice/Library/LaunchAgents/"+Label+".plist")
+	if !strings.Contains(plist, "--max-run-duration") || !strings.Contains(plist, "1m30s") {
+		t.Fatalf("plist does not include the configured --max-run-duration:\n%s", plist)
+	}
+}
+
+func TestValidateRejectsNonPositiveMaxRunDuration(t *testing.T) {
+	opts := testOptions()
+	opts.MaxRunDuration = 0
+	if err := opts.Validate(); err == nil {
+		t.Fatal("Validate accepted a zero max run duration")
+	}
+	opts.MaxRunDuration = -time.Second
+	if err := opts.Validate(); err == nil {
+		t.Fatal("Validate accepted a negative max run duration")
+	}
+}
+
+func TestValidateRejectsMaxRunDurationAtOrOverTSNetSessionTimeout(t *testing.T) {
+	opts := testOptions()
+	opts.MaxRunDuration = tsnet.DefaultSessionTimeout
+	if err := opts.Validate(); err == nil {
+		t.Fatal("Validate accepted a max run duration equal to the tsnet session timeout")
+	}
+	opts.MaxRunDuration = tsnet.DefaultSessionTimeout + time.Second
+	if err := opts.Validate(); err == nil {
+		t.Fatal("Validate accepted a max run duration over the tsnet session timeout")
 	}
 }
 

@@ -163,8 +163,9 @@ func buildHarness(b *proxyBinaries, core string) (*harness, error) {
 }
 
 // warmCaches runs one snapshot outside the agent. A first snapshot in an empty
-// HOME fills Spectra's caches and can approach the agent's fixed 30s run cap;
-// that first-run cost is Spectra's, not the proxy workflow under test.
+// HOME fills Spectra's caches and can take significantly longer than a warm
+// one, well within the agent's 3m default --max-run-duration; that first-run
+// cost is Spectra's, not the proxy workflow under test.
 func (h *harness) warmCaches(binary string) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()

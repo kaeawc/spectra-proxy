@@ -83,7 +83,7 @@ func TestCompleteWorkflow(t *testing.T) {
 		bind(t)
 		start := time.Now()
 		id, result := a.mustCall(protocol.OperationSnapshotCreate, `{"include_apps":false}`)
-		t.Logf("snapshot via agent took %s (direct warm-up %s; agent run cap 30s)", time.Since(start).Round(time.Millisecond), h.warmSnapshot.Round(time.Millisecond))
+		t.Logf("snapshot via agent took %s (direct warm-up %s; agent run cap 3m by default)", time.Since(start).Round(time.Millisecond), h.warmSnapshot.Round(time.Millisecond))
 		snapshotID = id
 		d := result.Diagnostic
 		if d.Schema != (protocol.SchemaRef{Name: protocol.SchemaSnapshot, Version: 1}) || d.SpectraVersion != v1 {

@@ -14,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 	"github.com/kaeawc/spectra-proxy/internal/agent"
 	"github.com/kaeawc/spectra-proxy/internal/agentinstall"
 	"github.com/kaeawc/spectra-proxy/internal/provision"
@@ -76,6 +78,7 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var appRoots pathList
 	allowSnapshot := fs.Bool("allow-snapshot", false, "Allow snapshot creation")
 	allowSnapshotApps := fs.Bool("allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
+	maxRunDuration := fs.Duration("max-run-duration", agentinstall.DefaultMaxRunDuration, "Maximum duration allowed for one diagnostic run")
 	fs.Var(&appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -84,11 +87,15 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--allow-snapshot-apps requires --allow-snapshot")
 		return 2
 	}
+	if err := validateMaxRunDuration(*maxRunDuration, false); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	resolved, code := resolveSpectraPath(*spectraPath, *provisionRoot, stderr)
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(resolved, appRoots, auditLog, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
+	a, ok := newAgent(resolved, appRoots, auditLog, *maxRunDuration, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
 	if !ok {
 		return 2
 	}
@@ -113,7 +120,7 @@ func runTSNet(args []string, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, agent.Policy{AllowSnapshot: opts.allowSnapshot, AllowSnapshotApps: opts.allowSnapshotApps}, stderr)
+	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, opts.maxRunDuration, agent.Policy{AllowSnapshot: opts.allowSnapshot, AllowSnapshotApps: opts.allowSnapshotApps}, stderr)
 	if !ok {
 		return 2
 	}
@@ -183,6 +190,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		StateDir:          opts.stateDir,
 		AuditLog:          opts.auditLog,
 		MaxConnections:    opts.maxConnections,
+		MaxRunDuration:    opts.maxRunDuration,
 		Ephemeral:         opts.ephemeral,
 		AppRoots:          opts.appRoots,
 		Tags:              opts.tags,
@@ -212,6 +220,7 @@ type tsnetOptions struct {
 	stateDir          string
 	auditLog          string
 	maxConnections    int
+	maxRunDuration    time.Duration
 	ephemeral         bool
 	appRoots          pathList
 	tags              stringList
@@ -233,7 +242,7 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, err)
 		return tsnetOptions{}, 1
 	}
-	opts = tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog, maxConnections: remoteTSNet.DefaultMaxConnections}
+	opts = tsnetOptions{listenAddr: remoteTSNet.DefaultAddr, hostname: "spectra-remote-agent", stateDir: stateDir, auditLog: auditLog, maxConnections: remoteTSNet.DefaultMaxConnections, maxRunDuration: agentinstall.DefaultMaxRunDuration}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&opts.spectraPath, "spectra", "", "Absolute path to the local spectra executable (default: provisioned Spectra)")
@@ -243,6 +252,7 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	fs.StringVar(&opts.stateDir, "tsnet-state-dir", opts.stateDir, "Private tsnet state directory")
 	fs.StringVar(&opts.auditLog, "audit-log", opts.auditLog, "Owner-private JSONL audit log path")
 	fs.IntVar(&opts.maxConnections, "max-connections", opts.maxConnections, "Maximum simultaneous target-agent sessions")
+	fs.DurationVar(&opts.maxRunDuration, "max-run-duration", opts.maxRunDuration, "Maximum duration allowed for one diagnostic run; must stay under the tsnet session timeout")
 	fs.BoolVar(&opts.ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")
 	fs.BoolVar(&opts.allowSnapshot, "allow-snapshot", false, "Allow snapshot creation")
 	fs.BoolVar(&opts.allowSnapshotApps, "allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
@@ -268,8 +278,30 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		fmt.Fprintln(stderr, "max-connections must be positive")
 		return tsnetOptions{}, 2
 	}
+	if err := validateMaxRunDuration(opts.maxRunDuration, true); err != nil {
+		fmt.Fprintln(stderr, err)
+		return tsnetOptions{}, 2
+	}
 	opts.spectraPath, code = resolveSpectraPath(opts.spectraPath, opts.provisionRoot, stderr)
 	return opts, code
+}
+
+// validateMaxRunDuration bounds --max-run-duration to a positive value that
+// fits the protocol's own timeout ceiling. capTSNet also requires it to stay
+// strictly under the tsnet session timeout, since serve-tsnet and install
+// configure a transport that would otherwise kill a still-running request
+// before the agent's own cap ever fires.
+func validateMaxRunDuration(d time.Duration, capTSNet bool) error {
+	if d <= 0 {
+		return fmt.Errorf("--max-run-duration must be positive")
+	}
+	if limit := time.Duration(protocol.MaxTimeoutMS) * time.Millisecond; d > limit {
+		return fmt.Errorf("--max-run-duration exceeds the protocol max timeout of %s", limit)
+	}
+	if capTSNet && d >= remoteTSNet.DefaultSessionTimeout {
+		return fmt.Errorf("--max-run-duration must be less than the tsnet session timeout of %s", remoteTSNet.DefaultSessionTimeout)
+	}
+	return nil
 }
 
 // resolveSpectraPath defaults an omitted --spectra to the provisioned
@@ -298,7 +330,7 @@ func resolveSpectraPath(spectraPath, provisionRoot string, stderr io.Writer) (st
 	return candidate, 0
 }
 
-func newAgent(spectraPath string, appRoots pathList, auditLog string, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
+func newAgent(spectraPath string, appRoots pathList, auditLog string, maxRunDuration time.Duration, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
 	if spectraPath == "" || !strings.HasPrefix(spectraPath, "/") {
 		fmt.Fprintln(stderr, "an absolute --spectra path is required")
 		return nil, false
@@ -309,11 +341,12 @@ func newAgent(spectraPath string, appRoots pathList, auditLog string, policy age
 		return nil, false
 	}
 	return &agent.Agent{
-		Runner:       agent.LocalSpectra{Path: spectraPath, AllowedAppRoots: appRoots},
-		AgentVersion: version,
-		Auditor:      auditor,
-		Policy:       policy,
-		Logf:         func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) },
+		Runner:         agent.LocalSpectra{Path: spectraPath, AllowedAppRoots: appRoots},
+		AgentVersion:   version,
+		MaxRunDuration: maxRunDuration,
+		Auditor:        auditor,
+		Policy:         policy,
+		Logf:           func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) },
 	}, true
 }
 

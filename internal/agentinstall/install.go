@@ -11,9 +11,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
+	"github.com/kaeawc/spectra-proxy/internal/agent"
+	"github.com/kaeawc/spectra-proxy/internal/transport/tsnet"
 )
 
 const Label = "dev.spectra-remote.agent"
+
+// DefaultMaxRunDuration mirrors agent.DefaultMaxRunDuration so Plist can omit
+// an explicit --max-run-duration flag when the installed agent would already
+// use that value by default.
+const DefaultMaxRunDuration = agent.DefaultMaxRunDuration
 
 // Options are the explicitly configured arguments passed to the target agent.
 type Options struct {
@@ -24,6 +34,7 @@ type Options struct {
 	StateDir          string
 	AuditLog          string
 	MaxConnections    int
+	MaxRunDuration    time.Duration
 	Ephemeral         bool
 	AllowSnapshot     bool
 	AllowSnapshotApps bool
@@ -158,6 +169,15 @@ func (o Options) Validate() error {
 	if o.MaxConnections < 1 {
 		return fmt.Errorf("max connections must be positive")
 	}
+	if o.MaxRunDuration <= 0 {
+		return fmt.Errorf("max run duration must be positive")
+	}
+	if protocolLimit := time.Duration(protocol.MaxTimeoutMS) * time.Millisecond; o.MaxRunDuration > protocolLimit {
+		return fmt.Errorf("max run duration exceeds the protocol max timeout of %s", protocolLimit)
+	}
+	if o.MaxRunDuration >= tsnet.DefaultSessionTimeout {
+		return fmt.Errorf("max run duration must be less than the tsnet session timeout of %s", tsnet.DefaultSessionTimeout)
+	}
 	for _, root := range o.AppRoots {
 		if !filepath.IsAbs(root) {
 			return fmt.Errorf("app root must be absolute: %q", root)
@@ -169,6 +189,9 @@ func (o Options) Validate() error {
 // Plist returns the exact plist document to be written for opts.
 func Plist(opts Options, plistPath string) string {
 	args := []string{opts.Program, "serve-tsnet", "--spectra", opts.SpectraPath, "--tsnet-addr", opts.ListenAddr, "--tsnet-hostname", opts.Hostname, "--tsnet-state-dir", opts.StateDir, "--audit-log", opts.AuditLog, "--max-connections", fmt.Sprint(opts.MaxConnections)}
+	if opts.MaxRunDuration != 0 && opts.MaxRunDuration != DefaultMaxRunDuration {
+		args = append(args, "--max-run-duration", opts.MaxRunDuration.String())
+	}
 	if opts.AllowSnapshot {
 		args = append(args, "--allow-snapshot")
 	}

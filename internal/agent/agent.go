@@ -36,6 +36,12 @@ type Policy struct {
 	AllowSnapshotApps bool
 }
 
+// DefaultMaxRunDuration is the per-request run cap used when MaxRunDuration
+// is left at its zero value. A real `spectra snapshot --json` can take well
+// over a minute on a used Mac, so this is sized for that rather than for a
+// quick health or inspect call.
+const DefaultMaxRunDuration = 3 * time.Minute
+
 // Agent dispatches requests to one local Spectra installation.
 type Agent struct {
 	Runner         Runner
@@ -221,7 +227,7 @@ func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Respo
 func (a *Agent) maxTimeoutMS() int {
 	max := a.MaxRunDuration
 	if max <= 0 {
-		max = 30 * time.Second
+		max = DefaultMaxRunDuration
 	}
 	if max > time.Duration(protocol.MaxTimeoutMS)*time.Millisecond {
 		return protocol.MaxTimeoutMS

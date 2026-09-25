@@ -26,6 +26,20 @@ func TestParseCallFlagsUsageErrors(t *testing.T) {
 	}
 }
 
+func TestParseCallFlagsDefaultTimeoutOutlastsARealSnapshot(t *testing.T) {
+	var stderr bytes.Buffer
+	opts, _, _, code := ParseCallFlags([]string{"--target", "host:1", "--operation", "health"}, &stderr, "/state")
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if opts.Timeout != DefaultCallTimeout {
+		t.Fatalf("default timeout = %s, want %s", opts.Timeout, DefaultCallTimeout)
+	}
+	if opts.Timeout <= 30*time.Second {
+		t.Fatalf("default timeout %s is not longer than the old 30s default", opts.Timeout)
+	}
+}
+
 func cliOpts(op string) CallOptions {
 	return CallOptions{Operation: op, Timeout: time.Second, Rand: bytes.NewReader(make([]byte, 32))}
 }

@@ -13,6 +13,11 @@ import (
 	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
 )
 
+// DefaultCallTimeout must outlast a real diagnostic run, not just a quick
+// health check: `spectra snapshot --json --no-apps` can take 78-98s on a used
+// Mac, and the agent's own MaxRunDuration default is 3 minutes.
+const DefaultCallTimeout = 3 * time.Minute
+
 // TSNetFlags carries transport configuration without importing the transport package.
 type TSNetFlags struct {
 	Hostname  string
@@ -43,7 +48,7 @@ func ParseCallFlags(args []string, stderr io.Writer, defaultStateDir string) (op
 	fs.StringVar(&target, "target", "", "Target tailnet hostname and port")
 	fs.StringVar(&opts.Operation, "operation", "", "Typed protocol operation")
 	fs.StringVar(&opts.Params, "params", "", "Operation parameters as JSON")
-	fs.DurationVar(&opts.Timeout, "timeout", 30*time.Second, "Connection and request timeout")
+	fs.DurationVar(&opts.Timeout, "timeout", DefaultCallTimeout, "Connection and request timeout")
 	fs.StringVar(&tsnetFlags.Hostname, "tsnet-hostname", "spectra-remote-controller", "Controller tailnet node hostname")
 	fs.StringVar(&tsnetFlags.StateDir, "tsnet-state-dir", defaultStateDir, "Private tsnet state directory")
 	fs.BoolVar(&tsnetFlags.Ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")

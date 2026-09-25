@@ -239,6 +239,49 @@ func TestRunProvisionSubcommand(t *testing.T) {
 	}
 }
 
+func TestMaxRunDurationRejectsNonPositive(t *testing.T) {
+	for _, command := range []string{"serve-stdio", "serve-tsnet", "install"} {
+		t.Run(command, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			args := []string{command, "--spectra", "/opt/spectra/bin/spectra", "--max-run-duration", "0s"}
+			if command != "serve-stdio" {
+				args = append(args, "--tsnet-hostname", "work-mac")
+			}
+			if command == "install" {
+				args = append(args, "--no-load")
+			}
+			if code := run(args, strings.NewReader(""), &out, &errout); code != 2 || !strings.Contains(errout.String(), "--max-run-duration must be positive") {
+				t.Fatalf("code=%d stderr=%q", code, errout.String())
+			}
+		})
+	}
+}
+
+func TestMaxRunDurationRejectsAtOrOverTSNetSessionTimeout(t *testing.T) {
+	for _, command := range []string{"serve-tsnet", "install"} {
+		t.Run(command, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			args := []string{command, "--spectra", "/opt/spectra/bin/spectra", "--tsnet-hostname", "work-mac", "--max-run-duration", "5m"}
+			if command == "install" {
+				args = append(args, "--no-load")
+			}
+			if code := run(args, strings.NewReader(""), &out, &errout); code != 2 || !strings.Contains(errout.String(), "tsnet session timeout") {
+				t.Fatalf("code=%d stderr=%q", code, errout.String())
+			}
+		})
+	}
+}
+
+func TestMaxRunDurationServeStdioAllowsUpToProtocolMax(t *testing.T) {
+	// serve-stdio has no tsnet session cap, so a value at (but not over) the
+	// protocol's own timeout ceiling must be accepted.
+	var out, errout bytes.Buffer
+	args := []string{"serve-stdio", "--spectra", "/opt/spectra/bin/spectra", "--max-run-duration", "10m"}
+	if code := run(args, strings.NewReader(""), &out, &errout); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errout.String())
+	}
+}
+
 func TestUsageListsProvision(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run(nil, strings.NewReader(""), &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "spectra-remote-agent provision") {

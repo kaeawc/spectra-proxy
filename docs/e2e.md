@@ -27,6 +27,11 @@ The harness builds this repository's `spectra-remote-agent` and
 served from a local HTTPS server. Provisioning trusts that server through
 `--source-ca-file` and that key through `--trusted-key`.
 
+The agent's `--max-run-duration` now defaults to 3 minutes (up from a fixed
+30s cap), since a real `spectra snapshot --json --no-apps` can take 78-98s on
+a used Mac; the harness's own timeouts and the controller's default
+`--timeout` of 3 minutes are sized to comfortably outlast that.
+
 Every test uses a fresh provisioning root, audit log, and release server.
 Subprocesses run with `HOME` and the XDG directories pointed at a temporary
 directory, so real install locations, LaunchAgents, audit logs, and Spectra's
