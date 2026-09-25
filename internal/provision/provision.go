@@ -183,9 +183,11 @@ func Rollback(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if len(o.Config.TrustedKeys) == 0 {
-		return Result{}, fmt.Errorf("no trusted Spectra release keys configured; rollback is disabled")
-	}
+	// Rollback never downloads anything and never checks a signature: it
+	// switches back to a previously installed binary already on disk, after
+	// re-verifying its recorded sha256 and re-running the compatibility
+	// check below. Trusted release keys guard fetch's signature verification
+	// and are irrelevant here.
 	unlock, err := prepareRoot(o.Config.Root)
 	if err != nil {
 		return Result{}, err

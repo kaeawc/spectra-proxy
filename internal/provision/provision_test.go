@@ -267,9 +267,15 @@ func TestRollbackRejectsTamperedOrIncompatiblePrevious(t *testing.T) {
 	if !bytes.Equal(stateBefore, stateAfter) || linkBefore != linkAfter {
 		t.Fatal("failed rollback changed active state")
 	}
+	// Rollback re-verifies the recorded sha256 and re-runs the compatibility
+	// check; it downloads nothing and needs no trusted release key.
 	o = s.opts()
 	o.Config.TrustedKeys = []string{}
-	if _, err := Rollback(context.Background(), o); err == nil || !strings.Contains(err.Error(), "no trusted Spectra release keys") {
-		t.Fatalf("empty trust rollback: %v", err)
+	result, err := Rollback(context.Background(), o)
+	if err != nil {
+		t.Fatalf("rollback without trusted keys: %v", err)
+	}
+	if result.Version != "v1.0.0" || result.Previous != "v1.1.0" {
+		t.Fatalf("rollback without trusted keys result = %+v", result)
 	}
 }
