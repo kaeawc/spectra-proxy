@@ -103,15 +103,23 @@ func checkCapabilities(ctx context.Context, runner Runner, binary, version strin
 	if c.Arch != runtime.GOARCH {
 		return &IncompatibleError{Check: fmt.Sprintf("arch %q, expected %q", c.Arch, runtime.GOARCH)}
 	}
-	for _, name := range []string{protocolv1.SchemaInspect, protocolv1.SchemaSnapshot} {
-		if err := checkInterface(c.Interfaces, name); err != nil {
-			return err
-		}
-	}
-	return nil
+	return checkInterfaces(c.Interfaces, c.OS)
 }
 
-func checkInterface(interfaces []capabilityInterface, schema string) error {
+// checkInterfaces requires the snapshot interface unconditionally and the
+// inspect interface only when the manifest reports darwin: Spectra core's
+// `capabilities --json` no longer advertises inspect on other OSes, since
+// inspect is macOS-only. If inspect IS present on any OS it must still carry
+// the supported spectra.inspect result-schema version, so a stray or
+// mismatched inspect entry is still rejected everywhere.
+func checkInterfaces(interfaces []capabilityInterface, manifestOS string) error {
+	if err := checkInterface(interfaces, protocolv1.SchemaSnapshot, true); err != nil {
+		return err
+	}
+	return checkInterface(interfaces, protocolv1.SchemaInspect, manifestOS == "darwin")
+}
+
+func checkInterface(interfaces []capabilityInterface, schema string, required bool) error {
 	name := "inspect"
 	if schema == protocolv1.SchemaSnapshot {
 		name = "snapshot"
@@ -129,6 +137,9 @@ func checkInterface(interfaces []capabilityInterface, schema string) error {
 	}
 	if mismatched != nil {
 		return &IncompatibleError{Check: fmt.Sprintf("%s result_schema %q version %d, expected %q version %d", name, mismatched.ResultSchema.Name, mismatched.ResultSchema.Version, schema, want)}
+	}
+	if !required {
+		return nil
 	}
 	return &IncompatibleError{Check: fmt.Sprintf("missing %s interface", name)}
 }

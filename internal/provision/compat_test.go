@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	protocolv1 "github.com/kaeawc/spectra-protocol/protocol/v1"
 )
 
 func TestIncompatibleCapabilities(t *testing.T) {
@@ -34,6 +36,36 @@ func TestIncompatibleCapabilities(t *testing.T) {
 			}
 			assertNotInstalled(t, s.root)
 		})
+	}
+}
+
+func snapshotOnlyInterfaces() []capabilityInterface {
+	snapshotVersion, _ := protocolv1.SupportedResultSchemaVersion(protocolv1.SchemaSnapshot)
+	return []capabilityInterface{{Name: "snapshot", ResultSchema: schemaRef{Name: protocolv1.SchemaSnapshot, Version: snapshotVersion}}}
+}
+
+func TestCheckInterfacesLinuxWithoutInspectIsCompatible(t *testing.T) {
+	// inspect is macOS-only: Spectra core does not advertise it on Linux, and
+	// that must not be treated as an incompatibility.
+	if err := checkInterfaces(snapshotOnlyInterfaces(), "linux"); err != nil {
+		t.Fatalf("linux without inspect: %v", err)
+	}
+}
+
+func TestCheckInterfacesDarwinWithoutInspectIsIncompatible(t *testing.T) {
+	var incompatible *IncompatibleError
+	if err := checkInterfaces(snapshotOnlyInterfaces(), "darwin"); !errors.As(err, &incompatible) {
+		t.Fatalf("darwin without inspect: expected incompatible error, got %v", err)
+	}
+}
+
+func TestCheckInterfacesInspectWrongVersionOnLinuxIsIncompatible(t *testing.T) {
+	// If inspect IS present, it must still carry the supported version, even
+	// on an OS where it isn't required at all.
+	interfaces := append(snapshotOnlyInterfaces(), capabilityInterface{Name: "inspect", ResultSchema: schemaRef{Name: protocolv1.SchemaInspect, Version: 2}})
+	var incompatible *IncompatibleError
+	if err := checkInterfaces(interfaces, "linux"); !errors.As(err, &incompatible) {
+		t.Fatalf("linux with mismatched inspect: expected incompatible error, got %v", err)
 	}
 }
 
