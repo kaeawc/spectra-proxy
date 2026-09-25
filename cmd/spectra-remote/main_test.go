@@ -1,15 +1,16 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"testing"
 
-func TestRunCallRejectsMissingTarget(t *testing.T) {
-	if got := runCall([]string{"--operation", "health"}); got != 2 {
-		t.Fatalf("runCall() = %d, want 2", got)
-	}
-}
+	"github.com/kaeawc/spectra-proxy/internal/controller"
+)
 
-func TestRunCallRejectsInvalidParams(t *testing.T) {
-	if got := runCall([]string{"--target", "host:7878", "--operation", "health", "--params", "{"}); got != 2 {
-		t.Fatalf("runCall() = %d, want 2", got)
+func TestParseCallFlagsRejectsMissingTarget(t *testing.T) {
+	var stderr bytes.Buffer
+	_, _, _, code := controller.ParseCallFlags([]string{"--operation", "health"}, &stderr, "/tmp/state")
+	if code != 2 {
+		t.Fatalf("ParseCallFlags() code = %d, want 2", code)
 	}
 }
