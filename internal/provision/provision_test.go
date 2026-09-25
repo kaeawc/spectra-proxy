@@ -195,6 +195,26 @@ func TestInstallUpdateRollbackStatusUninstall(t *testing.T) {
 	}
 }
 
+func TestStagingClearedAfterSuccessfulInstall(t *testing.T) {
+	s, priv := newTestServer(t)
+	s.releases["v1.0.0"] = fixture(t, "v1.0.0", priv, nil)
+	o := s.opts()
+	if _, err := Install(context.Background(), o, "v1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(s.root, "staging"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("staging not empty after successful install: %v", names)
+	}
+}
+
 func TestVersionRulesAndInterruptedCommit(t *testing.T) {
 	s, priv := newTestServer(t)
 	for _, v := range []string{"v1.0.0", "v1.1.0", "v1.2.0"} {

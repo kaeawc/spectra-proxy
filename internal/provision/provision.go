@@ -182,7 +182,30 @@ func commitInstall(o Options, s state, version, stagedBinary, digest string) (Re
 	if o.Logf != nil {
 		o.Logf("installed Spectra %s", version)
 	}
+	cleanStaging(root, o.Logf)
 	return Result{Version: version, Previous: s.Previous, InstalledAt: installed}, nil
+}
+
+// cleanStaging removes everything left in <root>/staging after a successful
+// commit, most importantly the downloaded release archive: fetchRelease
+// stages it there and nothing else removes it once the extracted binary has
+// been renamed into versions/. Leaving it behind wastes disk until the next
+// run's prepareRoot happens to wipe it. Cleanup failures are logged, not
+// fatal: the install or rollback already succeeded.
+func cleanStaging(root string, logf func(string, ...any)) {
+	staging := filepath.Join(root, "staging")
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		if logf != nil {
+			logf("list staging directory for cleanup: %v", err)
+		}
+		return
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(staging, entry.Name())); err != nil && logf != nil {
+			logf("remove staging entry %s: %v", entry.Name(), err)
+		}
+	}
 }
 
 func Rollback(ctx context.Context, opts Options) (Result, error) {
@@ -234,6 +257,7 @@ func Rollback(ctx context.Context, opts Options) (Result, error) {
 	if err := writeState(o.Config.Root, s); err != nil {
 		return Result{}, err
 	}
+	cleanStaging(o.Config.Root, o.Logf)
 	return Result{Version: s.Current, Previous: s.Previous, InstalledAt: info.InstalledAt}, nil
 }
 
