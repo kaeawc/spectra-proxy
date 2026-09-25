@@ -3,7 +3,7 @@ module github.com/kaeawc/spectra-proxy
 go 1.26.6
 
 require (
-	github.com/kaeawc/spectra-protocol v0.1.0
+	github.com/kaeawc/spectra-protocol v0.2.0
 	tailscale.com v1.102.4
 )
 

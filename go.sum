@@ -110,8 +110,8 @@ github.com/jmespath/go-jmespath v0.4.0 h1:BEgLn5cpjn8UN1mAw4NjwDrS35OdebyEtFe+9Y
 github.com/jmespath/go-jmespath v0.4.0/go.mod h1:T8mJZnbsbmF+m6zOOFylbeCJqk5+pHWvzYPziyZiYoo=
 github.com/jsimonetti/rtnetlink v1.4.1 h1:JfD4jthWBqZMEffc5RjgmlzpYttAVw1sdnmiNaPO3hE=
 github.com/jsimonetti/rtnetlink v1.4.1/go.mod h1:xJjT7t59UIZ62GLZbv6PLLo8VFrostJMPBAheR6OM8w=
-github.com/kaeawc/spectra-protocol v0.1.0 h1:+XBkIgQdEjQ7OxTpB/qBJAjy+Eq6veOIM6dOR034H2Y=
-github.com/kaeawc/spectra-protocol v0.1.0/go.mod h1:GK+yeQIkifwLhj8Q6cNTVknvWffJGEgtMJPD7GGD7NI=
+github.com/kaeawc/spectra-protocol v0.2.0 h1:KZbqWVnO8jqvxf/7xAZG+ZkyM+jjz0cS1+rqsqBi7DA=
+github.com/kaeawc/spectra-protocol v0.2.0/go.mod h1:GK+yeQIkifwLhj8Q6cNTVknvWffJGEgtMJPD7GGD7NI=
 github.com/klauspost/compress v1.19.1 h1:VsB4HPswih7mmZ8WleSFQ75c/Ui1M4trX5oAsJnhSlk=
 github.com/klauspost/compress v1.19.1/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a h1:+RR6SqnTkDLWyICxS1xpjCi/3dhyV+TgZwA6Ww3KncQ=
