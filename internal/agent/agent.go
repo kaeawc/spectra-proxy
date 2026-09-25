@@ -21,6 +21,16 @@ type Runner interface {
 	SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error)
 }
 
+// binaryIdentifier is an optional Runner capability that reports a value
+// identifying the on-disk Spectra binary currently in effect. A Runner that
+// implements it lets the Agent detect that `provision update` swapped the
+// binary out from under a cached capabilities probe, even though nothing
+// asked for `health`. Runners that don't implement it keep the original
+// refresh-on-health-only behaviour.
+type binaryIdentifier interface {
+	BinaryIdentity() (string, error)
+}
+
 type Policy struct {
 	AllowSnapshot     bool
 	AllowSnapshotApps bool
@@ -39,6 +49,7 @@ type Agent struct {
 	capabilities   SpectraCapabilities
 	capsErr        error
 	capsLoaded     bool
+	capsIdentity   string
 }
 
 type preparedRequest struct {
@@ -153,14 +164,31 @@ func (a *Agent) compatible(ctx context.Context, op protocol.Operation) (SpectraC
 func (a *Agent) loadCapabilities(ctx context.Context, refresh bool) (SpectraCapabilities, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	identity, identityErr := a.binaryIdentity()
+	if a.capsLoaded && !refresh && (identityErr != nil || identity != a.capsIdentity) {
+		refresh = true
+	}
 	if !a.capsLoaded || refresh {
 		a.capabilities, a.capsErr = a.Runner.Capabilities(ctx)
 		a.capsLoaded = true
+		a.capsIdentity = identity
 		if a.capsErr == nil && (a.capabilities.Schema.Name != "spectra.capabilities" || a.capabilities.Schema.Version != 1) {
 			a.capsErr = fmt.Errorf("unsupported Spectra capabilities schema")
 		}
 	}
 	return a.capabilities, a.capsErr
+}
+
+// binaryIdentity reports the current Runner's on-disk binary identity, or
+// ("", nil) when the Runner doesn't support identity checks. It never fails
+// the caller: an identity error is treated as "unknown, so refresh" by
+// loadCapabilities rather than surfaced here.
+func (a *Agent) binaryIdentity() (string, error) {
+	bi, ok := a.Runner.(binaryIdentifier)
+	if !ok {
+		return "", nil
+	}
+	return bi.BinaryIdentity()
 }
 
 func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Response {

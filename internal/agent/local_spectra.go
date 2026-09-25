@@ -36,6 +36,23 @@ func (s LocalSpectra) Capabilities(ctx context.Context) (SpectraCapabilities, er
 	return caps, nil
 }
 
+// BinaryIdentity implements the Agent's optional binaryIdentifier capability
+// so a cached capabilities probe can be detected as stale after `provision
+// update` swaps the `current` symlink to a new binary. It resolves through
+// symlinks and combines the resolved path with size and modification time,
+// which is cheap (no exec) and changes whenever the installed binary does.
+func (s LocalSpectra) BinaryIdentity() (string, error) {
+	resolved, err := filepath.EvalSymlinks(s.Path)
+	if err != nil {
+		return "", fmt.Errorf("resolve spectra binary path %q: %w", s.Path, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat spectra binary %q: %w", resolved, err)
+	}
+	return fmt.Sprintf("%s|%d|%d", resolved, info.Size(), info.ModTime().UnixNano()), nil
+}
+
 func (s LocalSpectra) Inspect(ctx context.Context, params protocol.InspectParams) (json.RawMessage, error) {
 	args := []string{"--json"}
 	for _, path := range params.AppPaths {

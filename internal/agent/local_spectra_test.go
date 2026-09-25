@@ -109,6 +109,36 @@ func TestLocalSpectraCapabilities(t *testing.T) {
 		t.Fatal("accepted incompatible capabilities schema")
 	}
 }
+func TestBinaryIdentityChangesAcrossSymlinkSwap(t *testing.T) {
+	dir := t.TempDir()
+	binA := makeFakeSpectra(t, `printf 'a'`)
+	binB := makeFakeSpectra(t, `printf 'bbbbbbbbbb'`)
+	link := filepath.Join(dir, "current")
+	if err := os.Symlink(binA, link); err != nil {
+		t.Fatal(err)
+	}
+	s := LocalSpectra{Path: link}
+	first, err := s.BinaryIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(binB, link); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.BinaryIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("BinaryIdentity did not change after symlink swap: %q", first)
+	}
+	if _, err := (LocalSpectra{Path: filepath.Join(dir, "missing")}).BinaryIdentity(); err == nil {
+		t.Fatal("accepted a path that does not exist")
+	}
+}
 func TestSubprocessCancellationKillsProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process groups require unix")

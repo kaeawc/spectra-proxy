@@ -47,6 +47,26 @@ func (f fakeRunner) SnapshotCreate(ctx context.Context, p protocol.SnapshotCreat
 	return json.RawMessage(`{"id":"snapshot-1"}`), nil
 }
 
+// identityRunner is a Runner that also implements binaryIdentifier, letting
+// tests simulate `provision update` swapping the installed Spectra binary:
+// both its identity and its capabilities can be changed between calls.
+type identityRunner struct {
+	identity string
+	caps     SpectraCapabilities
+	capsErr  error
+}
+
+func (r *identityRunner) BinaryIdentity() (string, error) { return r.identity, nil }
+func (r *identityRunner) Capabilities(context.Context) (SpectraCapabilities, error) {
+	return r.caps, r.capsErr
+}
+func (r *identityRunner) Inspect(context.Context, protocol.InspectParams) (json.RawMessage, error) {
+	return json.RawMessage(`{"ok":true}`), nil
+}
+func (r *identityRunner) SnapshotCreate(context.Context, protocol.SnapshotCreateParams) (json.RawMessage, error) {
+	return json.RawMessage(`{"id":"snapshot-1"}`), nil
+}
+
 type recordingAuditor struct {
 	events    []AuditEvent
 	failStage string
@@ -155,6 +175,51 @@ func TestIncompatibleSpectra(t *testing.T) {
 		})
 	}
 }
+func TestStaleCapabilityCacheRefreshesOnBinaryIdentityChange(t *testing.T) {
+	v1 := fixtureCaps(t)
+	v1.SpectraVersion = "v1.0.0"
+	runner := &identityRunner{identity: "spectra-v1|100|1", caps: v1}
+	a := &Agent{Runner: runner, Policy: Policy{AllowSnapshot: true}}
+
+	inspectVersion := func() string {
+		t.Helper()
+		resp := a.Handle(context.Background(), request(protocol.OperationInspect, `{"app_paths":["/Applications/A.app"]}`))
+		if resp.Error != nil {
+			t.Fatalf("inspect: %+v", resp.Error)
+		}
+		var result protocol.DiagnosticResult
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.SpectraVersion
+	}
+	if got := inspectVersion(); got != "v1.0.0" {
+		t.Fatalf("SpectraVersion = %q, want v1.0.0", got)
+	}
+
+	// `provision update` swaps the current symlink: a new binary identity and
+	// capabilities, but no `health` call happens in between.
+	v2 := fixtureCaps(t)
+	v2.SpectraVersion = "v2.0.0"
+	runner.identity = "spectra-v2|200|2"
+	runner.caps = v2
+	if got := inspectVersion(); got != "v2.0.0" {
+		t.Fatalf("SpectraVersion after binary swap = %q, want v2.0.0 (stale cache not refreshed)", got)
+	}
+
+	// A further swap to a schema-incompatible binary must be caught on the
+	// very next inspect, again without any intervening health call.
+	incompatible := fixtureCaps(t)
+	for i := range incompatible.Interfaces {
+		if incompatible.Interfaces[i].Name == "inspect" {
+			incompatible.Interfaces[i].ResultSchema.Version = 99
+		}
+	}
+	runner.identity = "spectra-v3|300|3"
+	runner.caps = incompatible
+	code(t, a.Handle(context.Background(), request(protocol.OperationInspect, `{"app_paths":["/Applications/A.app"]}`)), protocol.CodeIncompatibleSpectra)
+}
+
 func TestAuditStagesPeerAndFailures(t *testing.T) {
 	caps := fixtureCaps(t)
 	peer := Peer{Transport: "tsnet", LoginName: "alice@example.com", NodeName: "mac", Address: "100.1.2.3:7"}
@@ -182,9 +247,6 @@ func TestAuditStagesPeerAndFailures(t *testing.T) {
 	a.Runner = fakeRunner{caps: caps, inspect: func(context.Context, protocol.InspectParams) (json.RawMessage, error) {
 		return nil, errors.New("failed")
 	}}
-	a.mu.Lock()
-	a.capsLoaded = false
-	a.mu.Unlock()
 	code(t, a.Handle(ctx, request(protocol.OperationInspect, `{"app_paths":["/Applications/A.app"]}`)), protocol.CodeExecutionFailed)
 	if len(logs) != 2 {
 		t.Fatalf("failure audit log missing: %v", logs)
