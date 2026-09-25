@@ -122,7 +122,9 @@ type Outcome struct {
 	Diagnostic *protocol.DiagnosticResult
 }
 
-// Interpret turns a validated response into a typed outcome for known operations.
+// Interpret turns a validated response into a typed outcome. Remote errors are
+// returned as *RemoteError; a success for an operation without a known result
+// schema is a *ProtocolError.
 func Interpret(op protocol.Operation, resp protocol.Response) (Outcome, error) {
 	out := Outcome{Response: resp}
 	if resp.Error != nil {
@@ -141,6 +143,9 @@ func Interpret(op protocol.Operation, resp protocol.Response) (Outcome, error) {
 			return out, err
 		}
 		out.Diagnostic = &diagnostic
+	default:
+		// A success result this controller cannot validate must not be printed as trusted output.
+		return out, &ProtocolError{Err: &protocol.CodedError{Code: protocol.CodeIncompatibleSpectra, Err: fmt.Errorf("no result schema for operation %q", op)}}
 	}
 	return out, nil
 }

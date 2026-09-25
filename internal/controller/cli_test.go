@@ -33,11 +33,13 @@ func cliOpts(op string) CallOptions {
 func TestRunCallIncompatibleResultAndRemoteError(t *testing.T) {
 	cases := []struct {
 		name string
+		op   string
 		raw  string
 		want int
 	}{
-		{"schema", `{"protocol_version":"v1","request_id":"cli-0000000000000000","result":{"schema":{"name":"spectra.inspect","version":2},"spectra_version":"1","data":{}}}`, 3},
-		{"remote", `{"protocol_version":"v1","request_id":"cli-0000000000000000","error":{"code":"unavailable","message":"offline"}}`, 1},
+		{"schema", "inspect", `{"protocol_version":"v1","request_id":"cli-0000000000000000","result":{"schema":{"name":"spectra.inspect","version":2},"spectra_version":"1","data":{}}}`, 3},
+		{"remote", "inspect", `{"protocol_version":"v1","request_id":"cli-0000000000000000","error":{"code":"unavailable","message":"offline"}}`, 1},
+		{"unknown operation result", "future.operation", `{"protocol_version":"v1","request_id":"cli-0000000000000000","result":{"anything":true}}`, 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,12 +52,12 @@ func TestRunCallIncompatibleResultAndRemoteError(t *testing.T) {
 				_, _ = fmt.Fprintln(peer, tc.raw)
 			}()
 			var out, stderr bytes.Buffer
-			got := RunCall(context.Background(), client, cliOpts("inspect"), &out, &stderr)
+			got := RunCall(context.Background(), client, cliOpts(tc.op), &out, &stderr)
 			if got != tc.want {
 				t.Fatalf("RunCall()=%d want %d; stderr=%s", got, tc.want, stderr.String())
 			}
-			if stderr.Len() == 0 {
-				t.Fatal("expected one-line error")
+			if stderr.Len() == 0 || out.Len() != 0 {
+				t.Fatalf("expected one-line error and no output; stdout=%s", out.String())
 			}
 		})
 	}

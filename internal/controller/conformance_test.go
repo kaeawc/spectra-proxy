@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -78,13 +79,12 @@ func testResultCase(t *testing.T, tc conformance.Case) {
 		t.Fatal(err)
 	}
 	_, err := Interpret(tc.Operation, resp)
-	want := tc.Valid
-	if tc.Operation != protocol.OperationInspect && tc.Operation != protocol.OperationSnapshotCreate {
-		// Interpret deliberately preserves unrecognized operations as raw responses.
-		want = true
-	}
-	if (err == nil) != want {
+	if (err == nil) != tc.Valid {
 		t.Fatalf("Interpret error=%v valid=%t code=%s", err, tc.Valid, protocol.CodeOf(err))
+	}
+	var remote *RemoteError
+	if err != nil && !errors.As(err, &remote) && protocol.CodeOf(err) != tc.ErrorCode {
+		t.Fatalf("Interpret code=%s, want %s: %v", protocol.CodeOf(err), tc.ErrorCode, err)
 	}
 }
 
