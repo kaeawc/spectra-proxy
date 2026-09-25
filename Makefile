@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt-check mod-check ci release-check
+.PHONY: build test vet fmt-check mod-check ci release-check e2e
 
 build:
 	go build ./cmd/spectra-remote ./cmd/spectra-remote-agent
@@ -26,3 +26,7 @@ mod-check:
 ci: fmt-check vet test build
 
 release-check: mod-check ci
+
+# Opt-in end-to-end suite; requires SPECTRA_CORE_DIR (see docs/e2e.md).
+e2e:
+	go test -tags e2e -count=1 -timeout 20m ./e2e/...

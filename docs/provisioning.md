@@ -1,25 +1,30 @@
 # Spectra provisioning
 
-Provisioning is a local administrative library action. It is not a diagnostic
-protocol operation, and this package is not yet wired to a command binary.
+Provisioning is a local administrative action run as `spectra-remote-agent
+provision ...`. It is not a diagnostic protocol operation.
 
 ## Trust and configuration
 
 `internal/provision.Run(ctx, args, stdout, stderr)` accepts `install`, `update`,
 `rollback`, `status`, and `uninstall`. Install and update require `--version
 vX.Y.Z`. Shared flags are `--config`, `--root`, repeatable `--source`,
-`--trusted-key`, and `--allow-redirect-host`. `status --json` emits machine
-readable status. `--source` replaces the configured list; trusted keys and
-allowed redirect hosts append to it.
+`--trusted-key`, `--allow-redirect-host`, and `--source-ca-file`. `status
+--json` emits machine readable status. `--source` replaces the configured
+list; trusted keys and allowed redirect hosts append to it.
 
 The optional JSON config has `root`, `sources`, `trusted_keys`,
-`allowed_redirect_hosts`, and `keep_versions` fields. Unknown fields are
+`allowed_redirect_hosts`, `keep_versions`, and `source_ca_file` fields. Unknown fields are
 rejected. On Unix it must be owned by the current user and not writable by a
 group or everyone else. Sources must use HTTPS. Redirects must remain on the
 source host or an explicitly allowed host and must use HTTPS. The default
 source is the Spectra GitHub releases download path. The default allowed
 redirect hosts are `objects.githubusercontent.com` and
 `release-assets.githubusercontent.com`.
+
+`source_ca_file` (or `--source-ca-file`) names a PEM file whose certificates
+replace, rather than extend, the system roots for source TLS. It is meant for
+private mirrors and tests. Every PEM block must be a certificate, the file
+must contain at least one, and anything else in it is an error.
 
 The release public key has not yet been generated, so no key is built in.
 Set a trusted `ed25519:<base64>` key before install or update. Signed
@@ -43,7 +48,8 @@ values retain current and previous plus the most recently installed extras.
 
 The root contains `versions/<version>/spectra`, a `current` symlink to its
 version directory, `state.json`, `staging/`, and a `.lock` file during normal
-operation. The executable path is `<root>/current/spectra`. Root, versions,
+operation. The executable path is `<root>/current/spectra`; the agent commands default
+`--spectra` to it when it exists. Root, versions,
 and staging directories are private to the user. State records the current
 and previous versions, the SHA-256 of each retained binary, and install times.
 

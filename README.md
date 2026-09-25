@@ -1,6 +1,7 @@
 # Spectra Proxy
 
 See [Spectra provisioning](docs/provisioning.md) for local executable installation and rollback.
+See [End-to-end tests](docs/e2e.md) for the opt-in real-binary and two-machine Tailscale suites.
 
 Spectra Proxy is the separately installed remote-access component for
 Spectra. It contains the authenticated controller, target agent, and
@@ -60,7 +61,15 @@ frame, and operation result schema before printing a response. Add
 `--negotiate` to request the target's health manifest and verify that it
 supports the requested operation before sending the call. CLI exit codes are
 `0` for success, `1` for a remote or transport error, `2` for invalid usage or
-parameters, and `3` for a protocol or incompatible schema error.
+parameters, and `3` for a protocol or incompatible schema error. A successful
+result for an operation the controller has no result schema for is a protocol
+error (`3`) and is not printed.
+
+When `--spectra` is omitted, `serve-stdio`, `serve-tsnet`, and `install` use
+the provisioned executable (`<root>/current/spectra`) if one is installed,
+where the root is the provisioning default or `--provision-root`. Install it
+with `spectra-remote-agent provision install --version vX.Y.Z --trusted-key
+ed25519:...`; see [Spectra provisioning](docs/provisioning.md).
 
 ## Local agent installation
 
