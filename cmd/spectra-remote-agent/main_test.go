@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kaeawc/spectra-remote/internal/agentinstall"
+	"github.com/kaeawc/spectra-proxy/internal/agentinstall"
 )
 
 func TestRunRequiresAbsoluteSpectraPath(t *testing.T) {

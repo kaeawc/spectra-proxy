@@ -11,7 +11,7 @@ import (
 	"time"
 
 	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
-	remoteTSNet "github.com/kaeawc/spectra-remote/internal/transport/tsnet"
+	remoteTSNet "github.com/kaeawc/spectra-proxy/internal/transport/tsnet"
 )
 
 var version = "dev"

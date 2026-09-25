@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kaeawc/spectra-remote/internal/agent"
+	"github.com/kaeawc/spectra-proxy/internal/agent"
 	"tailscale.com/tsnet"
 )
 

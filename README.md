@@ -1,9 +1,10 @@
-# Spectra Remote
+# Spectra Proxy
 
-Spectra Remote is the separately installed remote-access component for
-Spectra. It will contain the authenticated controller, target agent,
-transport adapters, and provisioning workflow. The `spectra` repository
-remains responsible for local macOS diagnostics.
+Spectra Proxy is the separately installed remote-access component for
+Spectra. It contains the authenticated controller, target agent, and
+transport adapters. The `spectra` repository remains responsible for local
+macOS diagnostics. The commands remain named `spectra-remote` (controller)
+and `spectra-remote-agent` (target agent).
 
 The target agent supports an embedded Tailscale `tsnet` listener, and the
 controller joins the tailnet as its own managed node. Tailscale ACLs are the
@@ -17,13 +18,13 @@ signature-verified provisioning workflow; they will not be protocol methods.
 
 ## Local development
 
-The module temporarily uses a local `replace` directive for the sibling
-`../spectra-protocol` checkout. Replace it with a tagged protocol version
-before publishing this module.
+The module path is `github.com/kaeawc/spectra-proxy` and it depends on a
+tagged `github.com/kaeawc/spectra-protocol` release. Run `make ci` to build,
+test, vet, and check formatting locally. See [RELEASING.md](RELEASING.md) for
+release steps.
 
 ```bash
-go test ./...
-go build ./cmd/spectra-remote ./cmd/spectra-remote-agent
+make ci
 ```
 
 ## Tailscale transport

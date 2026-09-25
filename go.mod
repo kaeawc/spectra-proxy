@@ -1,9 +1,9 @@
-module github.com/kaeawc/spectra-remote
+module github.com/kaeawc/spectra-proxy
 
 go 1.26.6
 
 require (
-	github.com/kaeawc/spectra-protocol v0.0.0
+	github.com/kaeawc/spectra-protocol v0.1.0
 	tailscale.com v1.102.4
 )
 
@@ -52,5 +52,3 @@ require (
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
 )
-
-replace github.com/kaeawc/spectra-protocol => ../spectra-protocol

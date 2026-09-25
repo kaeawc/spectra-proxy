@@ -13,9 +13,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/kaeawc/spectra-remote/internal/agent"
-	"github.com/kaeawc/spectra-remote/internal/agentinstall"
-	remoteTSNet "github.com/kaeawc/spectra-remote/internal/transport/tsnet"
+	"github.com/kaeawc/spectra-proxy/internal/agent"
+	"github.com/kaeawc/spectra-proxy/internal/agentinstall"
+	remoteTSNet "github.com/kaeawc/spectra-proxy/internal/transport/tsnet"
 )
 
 var version = "dev"
