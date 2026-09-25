@@ -53,6 +53,13 @@ spectra-remote call --target work-mac:7878 --operation inspect \
   --params '{"app_paths":["/Applications/Slack.app"]}'
 ```
 
+The controller validates the protocol version, request ID, bounded response
+frame, and operation result schema before printing a response. Add
+`--negotiate` to request the target's health manifest and verify that it
+supports the requested operation before sending the call. CLI exit codes are
+`0` for success, `1` for a remote or transport error, `2` for invalid usage or
+parameters, and `3` for a protocol or incompatible schema error.
+
 ## Local agent installation
 
 After placing `spectra-remote-agent` and `spectra` at administrator-approved
