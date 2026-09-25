@@ -1,5 +1,7 @@
 # Spectra Proxy
 
+See [Spectra provisioning](docs/provisioning.md) for local executable installation and rollback.
+
 Spectra Proxy is the separately installed remote-access component for
 Spectra. It contains the authenticated controller, target agent, and
 transport adapters. The `spectra` repository remains responsible for local
