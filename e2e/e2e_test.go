@@ -115,6 +115,9 @@ func TestCompleteWorkflow(t *testing.T) {
 		bind(t)
 		e.mustProvision("update", "--version", v2)
 		e.requireCurrent(v2, v1)
+		// A diagnostic before health proves the running agent notices the
+		// swapped binary on its own; health always re-probes capabilities.
+		requireDiagnosticVersion(t, a, v2)
 		if m := a.health(); m.SpectraVersion != v2 {
 			t.Fatalf("after update spectra_version = %q, want %q", m.SpectraVersion, v2)
 		}
@@ -123,6 +126,9 @@ func TestCompleteWorkflow(t *testing.T) {
 		bind(t)
 		e.mustProvision("rollback")
 		e.requireCurrent(v1, v2)
+		// A diagnostic before health proves the running agent notices the
+		// swapped binary on its own; health always re-probes capabilities.
+		requireDiagnosticVersion(t, a, v1)
 		if m := a.health(); m.SpectraVersion != v1 {
 			t.Fatalf("after rollback spectra_version = %q, want %q", m.SpectraVersion, v1)
 		}
@@ -306,4 +312,18 @@ func tailscaleCall(t *testing.T, b *proxyBinaries, target, op, params string) pr
 		t.Fatalf("decode %s response: %v", op, err)
 	}
 	return resp
+}
+
+// requireDiagnosticVersion runs the cheapest diagnostic available on this
+// platform and checks which Spectra version stamped the result.
+func requireDiagnosticVersion(t *testing.T, a *agentProc, want string) {
+	t.Helper()
+	op, params := protocol.OperationSnapshotCreate, `{"include_apps":false}`
+	if runtime.GOOS == "darwin" {
+		op, params = protocol.OperationInspect, fmt.Sprintf(`{"app_paths":[%q]}`, calculatorApp)
+	}
+	_, out := a.mustCall(op, params)
+	if out.Diagnostic.SpectraVersion != want {
+		t.Fatalf("%s result spectra_version = %q, want %q", op, out.Diagnostic.SpectraVersion, want)
+	}
 }
