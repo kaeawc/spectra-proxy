@@ -70,6 +70,27 @@ func (s LocalSpectra) SnapshotCreate(ctx context.Context, params protocol.Snapsh
 	return s.runJSON(ctx, args...)
 }
 
+// ProcessList runs the fixed `spectra process -json --classify` and wraps its
+// rows as process.list data. sampled_at is when the run started.
+func (s LocalSpectra) ProcessList(ctx context.Context) (json.RawMessage, error) {
+	at := time.Now()
+	out, err := s.run(ctx, "process", "-json", "--classify")
+	if err != nil {
+		return nil, err
+	}
+	return normalizeCLIProcessList(out, at)
+}
+
+// JVMList runs the fixed `spectra jvm -json` and wraps its entries as
+// jvm.list data.
+func (s LocalSpectra) JVMList(ctx context.Context) (json.RawMessage, error) {
+	out, err := s.run(ctx, "jvm", "-json")
+	if err != nil {
+		return nil, err
+	}
+	return normalizeJVMList(out)
+}
+
 func (s LocalSpectra) validateAppPath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("app path must be absolute: %q", path)

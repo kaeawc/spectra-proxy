@@ -103,6 +103,18 @@ func TestSnapshotPolicyFlagDependency(t *testing.T) {
 	}
 }
 
+func TestDaemonSocketMustBeAbsolute(t *testing.T) {
+	for _, command := range []string{"serve-stdio", "serve-tsnet", "install"} {
+		t.Run(command, func(t *testing.T) {
+			var out, errout bytes.Buffer
+			args := []string{command, "--spectra", "/opt/spectra/bin/spectra", "--allow-processes", "--spectra-daemon-socket", "daemon.sock"}
+			if code := run(args, strings.NewReader(""), &out, &errout); code != 2 || !strings.Contains(errout.String(), "--spectra-daemon-socket must be absolute") {
+				t.Fatalf("code=%d stderr=%q", code, errout.String())
+			}
+		})
+	}
+}
+
 func TestStdioAuditIncludesLocalPeer(t *testing.T) {
 	dir := t.TempDir()
 	spectra := filepath.Join(dir, "spectra")

@@ -38,6 +38,8 @@ type Options struct {
 	Ephemeral         bool
 	AllowSnapshot     bool
 	AllowSnapshotApps bool
+	AllowProcesses    bool
+	DaemonSocket      string
 	AppRoots          []string
 	Tags              []string
 	AllowLogins       []string
@@ -166,6 +168,9 @@ func (o Options) Validate() error {
 	if o.AllowSnapshotApps && !o.AllowSnapshot {
 		return fmt.Errorf("--allow-snapshot-apps requires --allow-snapshot")
 	}
+	if o.DaemonSocket != "" && !filepath.IsAbs(o.DaemonSocket) {
+		return fmt.Errorf("spectra daemon socket path must be absolute")
+	}
 	if o.MaxConnections < 1 {
 		return fmt.Errorf("max connections must be positive")
 	}
@@ -197,6 +202,12 @@ func Plist(opts Options, plistPath string) string {
 	}
 	if opts.AllowSnapshotApps {
 		args = append(args, "--allow-snapshot-apps")
+	}
+	if opts.AllowProcesses {
+		args = append(args, "--allow-processes")
+	}
+	if opts.DaemonSocket != "" {
+		args = append(args, "--spectra-daemon-socket", opts.DaemonSocket)
 	}
 	if opts.Ephemeral {
 		args = append(args, "--tsnet-ephemeral")

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -78,6 +79,8 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var appRoots pathList
 	allowSnapshot := fs.Bool("allow-snapshot", false, "Allow snapshot creation")
 	allowSnapshotApps := fs.Bool("allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
+	allowProcesses := fs.Bool("allow-processes", false, allowProcessesUsage)
+	daemonSocket := fs.String("spectra-daemon-socket", "", daemonSocketUsage)
 	maxRunDuration := fs.Duration("max-run-duration", agentinstall.DefaultMaxRunDuration, "Maximum duration allowed for one diagnostic run")
 	fs.Var(&appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	if err := fs.Parse(args); err != nil {
@@ -91,11 +94,15 @@ func runStdio(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if err := validateDaemonSocket(*daemonSocket); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	resolved, code := resolveSpectraPath(*spectraPath, *provisionRoot, stderr)
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(resolved, appRoots, auditLog, *maxRunDuration, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps}, stderr)
+	a, ok := newAgent(resolved, appRoots, auditLog, *maxRunDuration, *daemonSocket, agent.Policy{AllowSnapshot: *allowSnapshot, AllowSnapshotApps: *allowSnapshotApps, AllowProcesses: *allowProcesses}, stderr)
 	if !ok {
 		return 2
 	}
@@ -120,7 +127,7 @@ func runTSNet(args []string, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, opts.maxRunDuration, agent.Policy{AllowSnapshot: opts.allowSnapshot, AllowSnapshotApps: opts.allowSnapshotApps}, stderr)
+	a, ok := newAgent(opts.spectraPath, opts.appRoots, opts.auditLog, opts.maxRunDuration, opts.daemonSocket, agent.Policy{AllowSnapshot: opts.allowSnapshot, AllowSnapshotApps: opts.allowSnapshotApps, AllowProcesses: opts.allowProcesses}, stderr)
 	if !ok {
 		return 2
 	}
@@ -199,6 +206,8 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		NoLoad:            opts.noLoad,
 		AllowSnapshot:     opts.allowSnapshot,
 		AllowSnapshotApps: opts.allowSnapshotApps,
+		AllowProcesses:    opts.allowProcesses,
+		DaemonSocket:      opts.daemonSocket,
 	}, installDeps())
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -229,6 +238,8 @@ type tsnetOptions struct {
 	noLoad            bool
 	allowSnapshot     bool
 	allowSnapshotApps bool
+	allowProcesses    bool
+	daemonSocket      string
 }
 
 func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad bool) (opts tsnetOptions, code int) {
@@ -256,6 +267,8 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 	fs.BoolVar(&opts.ephemeral, "tsnet-ephemeral", false, "Register an ephemeral tailnet node")
 	fs.BoolVar(&opts.allowSnapshot, "allow-snapshot", false, "Allow snapshot creation")
 	fs.BoolVar(&opts.allowSnapshotApps, "allow-snapshot-apps", false, "Allow whole-machine snapshot app collection")
+	fs.BoolVar(&opts.allowProcesses, "allow-processes", false, allowProcessesUsage)
+	fs.StringVar(&opts.daemonSocket, "spectra-daemon-socket", "", daemonSocketUsage)
 	fs.Var(&opts.appRoots, "allow-app-root", "Absolute app root allowed for inspect requests; may be repeated")
 	fs.Var(&opts.tags, "tsnet-tag", "Tailnet tag to advertise; may be repeated")
 	fs.Var(&opts.allowLogins, "tsnet-allow-login", "Tailnet login name allowed to connect; may be repeated")
@@ -279,6 +292,10 @@ func parseTSNetOptions(name string, args []string, stderr io.Writer, allowNoLoad
 		return tsnetOptions{}, 2
 	}
 	if err := validateMaxRunDuration(opts.maxRunDuration, true); err != nil {
+		fmt.Fprintln(stderr, err)
+		return tsnetOptions{}, 2
+	}
+	if err := validateDaemonSocket(opts.daemonSocket); err != nil {
 		fmt.Fprintln(stderr, err)
 		return tsnetOptions{}, 2
 	}
@@ -330,7 +347,33 @@ func resolveSpectraPath(spectraPath, provisionRoot string, stderr io.Writer) (st
 	return candidate, 0
 }
 
-func newAgent(spectraPath string, appRoots pathList, auditLog string, maxRunDuration time.Duration, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
+const (
+	allowProcessesUsage = "Allow the read-only process.list and jvm.list operations (discloses every visible process's command line)"
+	daemonSocketUsage   = "Absolute path to the local Spectra daemon socket used for process.list and jvm.list (default: Spectra's default socket)"
+)
+
+func validateDaemonSocket(path string) error {
+	if path != "" && !filepath.IsAbs(path) {
+		return fmt.Errorf("--spectra-daemon-socket must be absolute")
+	}
+	return nil
+}
+
+// newDaemon resolves the Spectra daemon the agent prefers for list
+// operations. A missing home directory only disables the daemon path; the
+// CLI fallback still works.
+func newDaemon(socket string) agent.Daemon {
+	if socket == "" {
+		resolved, err := agent.DefaultDaemonSocket(os.Getenv, os.UserHomeDir, runtime.GOOS)
+		if err != nil {
+			return nil
+		}
+		socket = resolved
+	}
+	return agent.SpectraDaemon{Socket: socket}
+}
+
+func newAgent(spectraPath string, appRoots pathList, auditLog string, maxRunDuration time.Duration, daemonSocket string, policy agent.Policy, stderr io.Writer) (*agent.Agent, bool) {
 	if spectraPath == "" || !strings.HasPrefix(spectraPath, "/") {
 		fmt.Fprintln(stderr, "an absolute --spectra path is required")
 		return nil, false
@@ -342,6 +385,7 @@ func newAgent(spectraPath string, appRoots pathList, auditLog string, maxRunDura
 	}
 	return &agent.Agent{
 		Runner:         agent.LocalSpectra{Path: spectraPath, AllowedAppRoots: appRoots},
+		Daemon:         newDaemon(daemonSocket),
 		AgentVersion:   version,
 		MaxRunDuration: maxRunDuration,
 		Auditor:        auditor,
