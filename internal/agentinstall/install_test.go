@@ -180,3 +180,24 @@ func TestPlistSnapshotPolicyFlags(t *testing.T) {
 		t.Fatalf("missing flags: %s", plist)
 	}
 }
+
+func TestPlistProcessPolicyAndDaemonSocketFlags(t *testing.T) {
+	opts := testOptions()
+	plist := Plist(opts, "/Users/alice/Library/LaunchAgents/agent.plist")
+	if strings.Contains(plist, "--allow-processes") || strings.Contains(plist, "--spectra-daemon-socket") {
+		t.Fatal("process listing or daemon socket configured by default")
+	}
+	opts.DaemonSocket = "relative/daemon.sock"
+	if err := opts.Validate(); err == nil {
+		t.Fatal("accepted a relative daemon socket")
+	}
+	opts.DaemonSocket = "/Users/alice/.spectra/daemon.sock"
+	opts.AllowProcesses = true
+	if err := opts.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	plist = Plist(opts, "/Users/alice/Library/LaunchAgents/agent.plist")
+	if !strings.Contains(plist, "--allow-processes</string>") || !strings.Contains(plist, "<string>--spectra-daemon-socket</string>\n<string>/Users/alice/.spectra/daemon.sock</string>") {
+		t.Fatalf("missing flags: %s", plist)
+	}
+}

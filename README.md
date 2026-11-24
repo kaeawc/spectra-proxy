@@ -54,6 +54,49 @@ The controller uses a separate tsnet identity and sends only a typed request:
 spectra-remote call --target work-mac:7878 --operation health
 spectra-remote call --target work-mac:7878 --operation inspect \
   --params '{"app_paths":["/Applications/Slack.app"]}'
+spectra-remote call --target work-mac:7878 --operation process.list
+spectra-remote call --target work-mac:7878 --operation jvm.list
+```
+
+The operations are:
+
+| Operation | Params | Result schema | Agent policy |
+| --- | --- | --- | --- |
+| `health` | none | capability manifest | always on |
+| `inspect` | `{"app_paths":[...]}` | `spectra.inspect` v1 | paths must be under `--allow-app-root` |
+| `snapshot.create` | `{"include_apps":bool}` | `spectra.snapshot` v1 | `--allow-snapshot` (and `--allow-snapshot-apps`) |
+| `process.list` | none | `spectra.process.list` v1 | `--allow-processes` |
+| `jvm.list` | none | `spectra.jvm.list` v1 | `--allow-processes` |
+
+`process.list` data is `{"sampled_at":"<RFC 3339>","processes":[...]}`, where
+each row is exactly what `spectra process --json --classify` prints. `jvm.list`
+data is `{"jvms":[...]}`, where each entry is exactly what `spectra jvm --json`
+prints. A successful `process.list` call prints:
+
+```json
+{
+  "protocol_version": "v1",
+  "request_id": "cli-0123456789abcdef",
+  "result": {
+    "schema": {
+      "name": "spectra.process.list",
+      "version": 1
+    },
+    "spectra_version": "0.42.0",
+    "data": {
+      "sampled_at": "2026-11-24T10:00:00.123456Z",
+      "processes": [
+        {
+          "pid": 1,
+          "command": "launchd",
+          "full_command_line": "/sbin/launchd",
+          "rss_kib": 12288,
+          "role": "system"
+        }
+      ]
+    }
+  }
+}
 ```
 
 The controller validates the protocol version, request ID, bounded response
@@ -106,6 +149,22 @@ The second flag requires the first. The installed Spectra must provide
 `spectra.snapshot` result schemas before the agent advertises or allows
 `inspect` and `snapshot.create`. A failed capabilities probe leaves `health`
 available and advertises only `health`.
+
+Process listing is disabled by default too, because rows include every
+visible process's full command line. Add `--allow-processes` to `serve-stdio`,
+`serve-tsnet`, or `install` to permit `process.list` and `jvm.list`. Both are
+read-only and take no parameters. The agent first asks the target's Spectra
+daemon (`spectra daemon`) over its local unix socket: it calls `daemon.status`
+and, if the daemon speaks `spectra-daemon/1` and lists the method, calls
+`process.list` with `{"classify":true}` or `jvm.list` with `{}`. The socket
+defaults to Spectra's own default (`$SPECTRA_DAEMON_DIR/daemon.sock`, else
+`$XDG_RUNTIME_DIR/spectra/daemon.sock` on Linux, else
+`~/.spectra/daemon.sock`); override it with an absolute
+`--spectra-daemon-socket`. When no daemon answers or it does not list the
+method, the agent runs the local Spectra with the fixed argv
+`process -json --classify` or `jvm -json`. Health advertises each list
+operation only when `--allow-processes` is set and one of those paths is usable:
+the daemon lists the method, or the local Spectra passes the capabilities probe.
 
 The service is `dev.spectra-remote.agent` in the current user's launchd
 domain. Use `spectra-remote-agent install status` to inspect it, and

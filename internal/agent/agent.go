@@ -34,6 +34,9 @@ type binaryIdentifier interface {
 type Policy struct {
 	AllowSnapshot     bool
 	AllowSnapshotApps bool
+	// AllowProcesses permits the read-only process.list and jvm.list
+	// operations, which disclose every visible process's command line.
+	AllowProcesses bool
 }
 
 // DefaultMaxRunDuration is the per-request run cap used when MaxRunDuration
@@ -44,7 +47,10 @@ const DefaultMaxRunDuration = 3 * time.Minute
 
 // Agent dispatches requests to one local Spectra installation.
 type Agent struct {
-	Runner         Runner
+	Runner Runner
+	// Daemon, when set, is preferred for process.list and jvm.list if its
+	// daemon.status lists the matching method.
+	Daemon         Daemon
 	AgentVersion   string
 	MaxRunDuration time.Duration
 	Auditor        Auditor
@@ -63,6 +69,7 @@ type preparedRequest struct {
 	snapshot protocol.SnapshotCreateParams
 	caps     protocol.SpectraCapabilities
 	schema   protocol.SchemaRef
+	list     listRoute
 }
 
 // Handle validates, authorizes, audits, and dispatches one request.
@@ -99,6 +106,8 @@ func (a *Agent) prepare(ctx context.Context, req protocol.Request) (preparedRequ
 		return a.prepareCompatible(ctx, req.Operation, p)
 	case protocol.OperationSnapshotCreate:
 		return a.prepareSnapshot(ctx, req)
+	case protocol.OperationProcessList, protocol.OperationJVMList:
+		return a.prepareList(ctx, req)
 	default:
 		return preparedRequest{}, protocol.CodeUnsupportedOperation, fmt.Errorf("operation %q is not supported", req.Operation)
 	}
@@ -149,6 +158,9 @@ func (a *Agent) runPrepared(ctx context.Context, req protocol.Request, p prepare
 	case protocol.OperationSnapshotCreate:
 		result, err := a.Runner.SnapshotCreate(ctx, p.snapshot)
 		return a.diagnosticResponse(req.RequestID, p.schema, p.caps.SpectraVersion, result, err, ctx)
+	case protocol.OperationProcessList, protocol.OperationJVMList:
+		result, err := a.runList(ctx, req.Operation, p.list)
+		return a.diagnosticResponse(req.RequestID, p.schema, p.list.spectraVersion, result, err, ctx)
 	}
 	return failure(req.RequestID, protocol.CodeInternal, fmt.Errorf("unreachable operation %q", req.Operation))
 }
@@ -229,6 +241,18 @@ func (a *Agent) health(ctx context.Context, req protocol.Request) protocol.Respo
 				continue
 			}
 			if schema, schemaErr := caps.ResultSchemaFor(op); schemaErr == nil {
+				manifest.Operations = append(manifest.Operations, protocol.OperationCapability{Name: op, ResultSchema: &schema})
+			}
+		}
+	}
+	if a.Policy.AllowProcesses {
+		st, daemonOK := a.daemonStatus(ctx)
+		for _, op := range listOperations {
+			if route, _, routeErr := a.routeList(ctx, op, st, daemonOK); routeErr == nil {
+				if manifest.SpectraVersion == "" {
+					manifest.SpectraVersion = route.spectraVersion
+				}
+				schema := listSchema(op)
 				manifest.Operations = append(manifest.Operations, protocol.OperationCapability{Name: op, ResultSchema: &schema})
 			}
 		}

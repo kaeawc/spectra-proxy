@@ -137,7 +137,7 @@ func Interpret(op protocol.Operation, resp protocol.Response) (Outcome, error) {
 			return out, &protocol.CodedError{Code: protocol.CodeOf(err), Err: fmt.Errorf("decode health: %w", err)}
 		}
 		out.Health = &health
-	case protocol.OperationInspect, protocol.OperationSnapshotCreate:
+	case protocol.OperationInspect, protocol.OperationSnapshotCreate, protocol.OperationProcessList, protocol.OperationJVMList:
 		diagnostic, err := protocol.DecodeResult(resp, op)
 		if err != nil {
 			return out, err

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	protocol "github.com/kaeawc/spectra-protocol/protocol/v1"
+	"github.com/kaeawc/spectra-proxy/internal/agent"
 )
 
 func TestParseCallFlagsUsageErrors(t *testing.T) {
@@ -138,5 +139,90 @@ func TestRandomIDFormat(t *testing.T) {
 	}
 	if _, err := hex.DecodeString(id[4:]); err != nil {
 		t.Fatalf("id suffix: %v", err)
+	}
+}
+
+// listDaemon is a fixed in-memory Spectra daemon for end-to-end list calls.
+type listDaemon struct{}
+
+func (listDaemon) Status(context.Context) (agent.DaemonStatus, error) {
+	return agent.DaemonStatus{Protocol: "spectra-daemon/1", Version: "0.42.0", Methods: []string{"daemon.status", "process.list", "jvm.list"}}, nil
+}
+func (listDaemon) Call(_ context.Context, method string, _ any) (json.RawMessage, error) {
+	switch method {
+	case "process.list":
+		return json.RawMessage(`{"sampled_at":"2026-11-24T10:00:00.123456Z","processes":[{"pid":1,"ppid":0,"uid":0,"user":"root","command":"launchd","full_command_line":"/sbin/launchd","rss_kib":12288,"cpu_pct":0.1,"role":"system","runtime":"native"}]}`), nil
+	case "jvm.list":
+		return json.RawMessage(`null`), nil
+	}
+	return nil, fmt.Errorf("unexpected method %q", method)
+}
+
+func TestRunCallPrintsListResults(t *testing.T) {
+	cases := []struct {
+		op   protocol.Operation
+		data string
+	}{
+		{protocol.OperationProcessList, `{"sampled_at":"2026-11-24T10:00:00.123456Z","processes":[{"pid":1,"ppid":0,"uid":0,"user":"root","command":"launchd","full_command_line":"/sbin/launchd","rss_kib":12288,"cpu_pct":0.1,"role":"system","runtime":"native"}]}`},
+		{protocol.OperationJVMList, `{"jvms":[]}`},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.op), func(t *testing.T) {
+			a := &agent.Agent{Daemon: listDaemon{}, Policy: agent.Policy{AllowProcesses: true}}
+			client, peer := net.Pipe()
+			defer client.Close()
+			go func() {
+				defer peer.Close()
+				_ = agent.Serve(context.Background(), a, peer, peer)
+			}()
+			opts := cliOpts(string(tc.op))
+			opts.Negotiate = true
+			var out, stderr bytes.Buffer
+			if got := RunCall(context.Background(), client, opts, &out, &stderr); got != 0 {
+				t.Fatalf("RunCall()=%d stderr=%s", got, stderr.String())
+			}
+			t.Logf("stdout:\n%s", out.String())
+			var resp protocol.Response
+			if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := Interpret(tc.op, resp)
+			if err != nil || outcome.Diagnostic == nil {
+				t.Fatalf("Interpret: %v", err)
+			}
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, outcome.Diagnostic.Data); err != nil {
+				t.Fatal(err)
+			}
+			if compact.String() != tc.data || outcome.Diagnostic.SpectraVersion != "0.42.0" {
+				t.Fatalf("diagnostic = %+v data=%s", outcome.Diagnostic, compact.String())
+			}
+		})
+	}
+}
+
+func TestInterpretListResultShapes(t *testing.T) {
+	cases := []struct {
+		op     protocol.Operation
+		result string
+		code   protocol.ErrorCode
+	}{
+		{protocol.OperationProcessList, `{"schema":{"name":"spectra.process.list","version":1},"spectra_version":"1","data":{"processes":[]}}`, ""},
+		{protocol.OperationJVMList, `{"schema":{"name":"spectra.jvm.list","version":1},"spectra_version":"1","data":{"jvms":[{"pid":1}]}}`, ""},
+		{protocol.OperationProcessList, `{"schema":{"name":"spectra.process.list","version":1},"spectra_version":"1","data":[]}`, protocol.CodeInvalidRequest},
+		{protocol.OperationJVMList, `{"schema":{"name":"spectra.process.list","version":1},"spectra_version":"1","data":{"processes":[]}}`, protocol.CodeIncompatibleSpectra},
+	}
+	for _, tc := range cases {
+		resp := protocol.Response{ProtocolVersion: protocol.Version, RequestID: "req-1", Result: json.RawMessage(tc.result)}
+		_, err := Interpret(tc.op, resp)
+		if tc.code == "" {
+			if err != nil {
+				t.Fatalf("%s: %v", tc.op, err)
+			}
+			continue
+		}
+		if protocol.CodeOf(err) != tc.code {
+			t.Fatalf("%s: code %s, want %s: %v", tc.op, protocol.CodeOf(err), tc.code, err)
+		}
 	}
 }
